@@ -1,5 +1,6 @@
 import * as clojureLexer from './clojure-lexer';
 import * as tokenCursor from './token-cursor';
+import { invalidateStructuralIndex } from './structural-index';
 import * as objectUtil from '../util/object';
 import * as vscode from 'vscode';
 import _ = require('lodash');
@@ -735,6 +736,7 @@ export class LineInputModel implements EditableModel {
     // now splice in our edited lines
     this.lines.splice(startLine, endLine - startLine + 1, ...items);
     this.lineOffsets.length = Math.min(this.lineOffsets.length, startLine + 1);
+    invalidateStructuralIndex(this);
 
     // New lines have already been tokenized in order. Only their last boundary
     // needs a flush, which propagates a changed lexical state to following lines.

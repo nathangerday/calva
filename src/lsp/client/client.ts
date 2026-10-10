@@ -118,7 +118,7 @@ export const createClient = (params: CreateClientParams): defs.LspClient => {
   let serverOptions: vscode_lsp.ServerOptions;
   if (path.extname(params.lsp_server_path) === '.jar') {
     serverOptions = {
-      command: path.join(process.env.JAVA_HOME, 'bin', 'java'),
+      command: process.env.JAVA_HOME ? path.join(process.env.JAVA_HOME, 'bin', 'java') : 'java',
       args: ['-jar', params.lsp_server_path],
     };
   } else {

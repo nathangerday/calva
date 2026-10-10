@@ -117,10 +117,33 @@ async function documentFormatJob(
   if (token) {
     subscriptions.push(token.onCancellationRequested(() => request.cancel()));
   }
+  // Avoid flicker during quick edits while making long or queued jobs visible.
+  const progressTimer = setTimeout(() => {
+    void vscode.window
+      .withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `Calva: Formatting ${doc.fileName.split(/[\\/]/).pop()}`,
+          cancellable: true,
+        },
+        (_progress, cancellationToken) => {
+          const cancellation = cancellationToken.onCancellationRequested(request.cancel);
+          // The original await below owns formatter failures. Progress simply closes.
+          return request.promise
+            .then(
+              () => undefined,
+              () => undefined
+            )
+            .finally(() => cancellation.dispose());
+        }
+      )
+      .then(undefined, (error) => console.error('Formatting progress failed', error));
+  }, 750);
   try {
     const result = await request.promise;
     return valid() ? result : undefined;
   } finally {
+    clearTimeout(progressTimer);
     subscriptions.forEach((subscription) => subscription.dispose());
   }
 }

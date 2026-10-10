@@ -334,6 +334,18 @@ describe('ns-form util', () => {
   });
 
   describe('nsFromText', function () {
+    it('skips namespace-free data and retains unusual namespace whitespace', function () {
+      assert.strictEqual(nsFormUtil.nsRangeFromText('{:label "dans les sciences"}'), null);
+      assert.deepStrictEqual(nsFormUtil.nsFromText('(\n ns, foo.bar)\n:x'), [
+        'foo.bar',
+        '(\n ns, foo.bar)',
+      ]);
+      assert.deepStrictEqual(nsFormUtil.nsFromText("(in-ns 'foo.bar)\n:x"), [
+        'foo.bar',
+        "(in-ns 'foo.bar)",
+      ]);
+      assert.strictEqual(nsFormUtil.nsRangeFromText('{:label "ns"}'), null);
+    });
     it('defaults to `null`', function () {
       expectLib.expect(nsFormUtil.nsFromText('(no-ns a-b.c-d)\nfoo')).toBe(null);
     });

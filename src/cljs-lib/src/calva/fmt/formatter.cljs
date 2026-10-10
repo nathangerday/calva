@@ -1,5 +1,6 @@
 (ns calva.fmt.formatter
   (:require [cljfmt.core :as cljfmt]
+            [calva.fmt.split-keypairs :as split-keypairs]
             #_[zprint.core :refer [zprint-str]]
             [calva.js-utils :refer [jsify cljify]]
             [calva.fmt.util :as util]
@@ -59,11 +60,12 @@
                         ;;
                         (not full-document?)
                         (dissoc :normalize-newlines-at-file-end?))]
-    (cljfmt/reformat-string range-text (-> cljfmt-config
-                                           convert-legacy-keys
-                                           convert-align-associative
-                                           (assoc :remove-multiple-non-indenting-spaces?
-                                                  trim-space-between?)))))
+    (split-keypairs/reformat-string
+     range-text (-> cljfmt-config
+                    convert-legacy-keys
+                    convert-align-associative
+                    (assoc :remove-multiple-non-indenting-spaces?
+                           trim-space-between?)))))
 
 (defn format-text
   [{:keys [range-text eol config] :as m}]

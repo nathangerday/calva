@@ -14,6 +14,9 @@ import { getScannerMaxLength } from '../../cursor-doc/model';
 import { LARGE_FORMAT_RANGE } from './local-ranges';
 import * as state from '../../state';
 import * as healer from './healer';
+import { alignRanges } from './align-ranges';
+import { StringDocument } from '../../cursor-doc/model';
+import { getStructuralIndex } from '../../cursor-doc/structural-index';
 
 /**
  * Calculates the indent edit needed for a position without performing it.
@@ -153,7 +156,8 @@ async function rangeReformatChanges(
   document: vscode.TextDocument,
   originalRange: vscode.Range,
   onType: boolean,
-  token?: vscode.CancellationToken
+  token?: vscode.CancellationToken,
+  extraConfig: CljFmtConfig = {}
 ): Promise<respacer.WhitespaceChange[] | undefined> {
   const mirrorDoc = docMirror.getDocument(document);
   const startIndex = document.offsetAt(originalRange.start);
@@ -173,7 +177,7 @@ async function rangeReformatChanges(
       onType,
       startColumn: originalRange.start.character,
       fullDocument: startIndex === 0 && endIndex === document.getText().length,
-      config: config.getConfigNow(document),
+      config: { ...config.getConfigNow(document), ...extraConfig },
       scannerMaxLength: getScannerMaxLength(),
     },
     token
@@ -444,8 +448,83 @@ export function formatPositionCommand(editor: vscode.TextEditor) {
   return formatPosition(editor, false);
 }
 
-export function alignPositionCommand(editor: vscode.TextEditor) {
-  return formatPosition(editor, true, { 'align-associative?': true });
+export async function alignPositionCommand(editor: vscode.TextEditor): Promise<boolean> {
+  const doc = editor.document;
+  const version = doc.version;
+  const mirror = docMirror.getDocument(doc);
+  if (mirror.model.documentVersion !== version) {
+    return false;
+  }
+  const selections: [number, number][] = editor.selections.map((selection) => [
+    doc.offsetAt(selection.anchor),
+    doc.offsetAt(selection.active),
+  ]);
+  const ranges = alignRanges(mirror.model.lineInputModel, selections);
+  if (!ranges.length) {
+    return false;
+  }
+  const cursorOffsets = selections.map(([, active]) => active);
+  const changes: respacer.WhitespaceChange[] = [];
+  for (const range of ranges) {
+    const isSelection = selections.some(
+      ([anchor, active]) =>
+        anchor !== active &&
+        Math.min(anchor, active) >= range[0] &&
+        Math.max(anchor, active) <= range[1]
+    );
+    if (isSelection) {
+      const selectedText = doc.getText(
+        new vscode.Range(doc.positionAt(range[0]), doc.positionAt(range[1]))
+      );
+      const missing = cursorDocUtils.getMissingBrackets(selectedText);
+      if (missing.prepend || missing.append) {
+        // Match selection formatting's support for incomplete collections.
+        // Healing must not reindent lines inside multiline string literals.
+        const fragment = new StringDocument(selectedText).model;
+        fragment.flushChanges();
+        if (getStructuralIndex(fragment)?.hasMultilineStrings) {
+          return false;
+        }
+        const selectedChanges = await rangeReformatChanges(
+          doc,
+          new vscode.Range(doc.positionAt(range[0]), doc.positionAt(range[1])),
+          true,
+          undefined,
+          { 'align-associative?': true }
+        );
+        if (!selectedChanges || doc.isClosed || doc.version !== version) {
+          return false;
+        }
+        changes.push(...selectedChanges);
+        continue;
+      }
+    }
+    // Respect these exact bounds. Recalculating from their opening offset
+    // would promote a nested collection to its parent (sometimes the file).
+    const info = await formatDocIndexesInfo(
+      doc,
+      true,
+      range[0],
+      cursorOffsets,
+      { 'align-associative?': true },
+      range
+    );
+    if (!info || doc.isClosed || doc.version !== version) {
+      return false;
+    }
+    changes.push(...info.changes);
+  }
+  if (!vscode.window.visibleTextEditors.includes(editor)) {
+    return false;
+  }
+  return editor.edit((edit) => {
+    for (const change of changes.sort((a, b) => b.start - a.start)) {
+      edit.replace(
+        new vscode.Range(doc.positionAt(change.start), doc.positionAt(change.end)),
+        change.text
+      );
+    }
+  });
 }
 
 export function trimWhiteSpacePositionCommand(editor: vscode.TextEditor) {

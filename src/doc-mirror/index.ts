@@ -135,6 +135,7 @@ export class DocumentModel implements EditableModel {
     newModel.insertString(0, text);
     newModel.flushChanges();
     newModel.dirtyLines = [];
+    newModel.changedLines.clear();
     newModel.insertedLines.clear();
     newModel.deletedLines.clear();
     this.lineInputModel = newModel;
@@ -501,6 +502,7 @@ function processChanges(event: vscode.TextDocumentChangeEvent) {
 
   // we must clear out the repaint cache data, since we don't use it.
   model.lineInputModel.dirtyLines = [];
+  model.lineInputModel.changedLines.clear();
   model.lineInputModel.insertedLines.clear();
   model.lineInputModel.deletedLines.clear();
 
@@ -532,6 +534,10 @@ function addDocument(doc?: vscode.TextDocument): boolean {
     if (!documents.has(doc)) {
       const document = new MirroredDocument(doc);
       document.model.lineInputModel.insertString(0, doc.getText());
+      document.model.lineInputModel.flushChanges();
+      document.model.lineInputModel.changedLines.clear();
+      document.model.lineInputModel.insertedLines.clear();
+      document.model.lineInputModel.deletedLines.clear();
       documents.set(doc, document);
       return false;
     } else {

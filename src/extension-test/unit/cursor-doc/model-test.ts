@@ -66,3 +66,54 @@ describe('LineInputModel line offsets', () => {
     assert.deepStrictEqual(input.getRowCol(5), [1, 1]);
   });
 });
+
+describe('LineInputModel incremental tokenization', () => {
+  it('does not re-tokenize already constructed lines on the first flush', () => {
+    const input = new model.StringDocument(Array(1000).fill('(a "text")').join('\n')).model;
+    let relexed = 0;
+    for (const line of input.lines) {
+      const processLine = line.processLine;
+      line.processLine = function (state) {
+        relexed++;
+        processLine.call(this, state);
+      };
+    }
+    input.flushChanges();
+    assert.strictEqual(relexed, 1);
+    input.flushChanges();
+    assert.strictEqual(relexed, 1);
+  });
+
+  for (const eol of ['\n', '\r\n']) {
+    it(`retains fresh lexical states after mixed batched edits with ${JSON.stringify(eol)}`, () => {
+      const input = new model.StringDocument(
+        ['(a "multi', 'line") ; comment', '#"regex" [1]'].join(eol)
+      ).model;
+      let seed = 71;
+      const random = (n: number) => {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        return seed % n;
+      };
+      const snapshot = (m: model.LineInputModel) =>
+        m.lines.map((line) => ({
+          text: line.text,
+          startState: line.startState,
+          endState: line.endState,
+          tokens: line.tokens,
+        }));
+      for (let step = 0; step < 300; step++) {
+        const row = random(input.lines.length);
+        const offset = input.getOffsetForLine(row) + random(input.lines[row].text.length + 1);
+        const inserted = ['"', ';', eol, `x${eol}"`, '\\"', ')', '😀', ''][random(8)];
+        input.insertString(offset, inserted);
+        if (step % 3 === 0) {
+          input.flushChanges();
+          const fresh = new model.StringDocument(input.lines.map((line) => line.text).join(eol))
+            .model;
+          fresh.flushChanges();
+          assert.deepStrictEqual(snapshot(input), snapshot(fresh), `step ${step}`);
+        }
+      }
+    });
+  }
+});

@@ -3,6 +3,12 @@ import * as vscode from 'vscode';
 import * as utilities from '../utilities';
 import * as formatter from '../calva-fmt/src/format';
 import * as respacer from '../calva-fmt/src/respacer';
+import {
+  localFormatRanges,
+  mergeFormatRanges,
+  postEditChangedRanges,
+} from '../calva-fmt/src/local-ranges';
+import * as formatterConfig from '../formatter-config';
 import * as tokenCursor from '../cursor-doc/token-cursor';
 import * as documentModel from '../cursor-doc/model';
 import * as _ from 'lodash';
@@ -177,35 +183,43 @@ export class DocumentModel implements EditableModel {
     }
   }
 
-  private postEditReformat(editor: vscode.TextEditor, offsets: number[]): Thenable<boolean> {
+  private postEditReformat(
+    editor: vscode.TextEditor,
+    offsets: number[],
+    changedRanges: ModelEditRange[]
+  ): Thenable<boolean> {
     // Now that the document has been edited, calculate the reformatting:
-    const formattedRanges = new Set<string>();
-    const reformatChange: respacer.WhitespaceChange[] = _.sortedUniq(offsets.sort((a, b) => b - a))
-      .flatMap((p) => {
+    const doc = this.document.document;
+    const ranges = mergeFormatRanges(
+      offsets
+        .map((p) => formatter.formatDocIndexRange(doc, p, {}))
+        .filter((range) => range && range[0] >= 0)
+    );
+    const plannedRanges = localFormatRanges(
+      this.lineInputModel,
+      ranges,
+      changedRanges,
+      formatterConfig.getConfigNow(doc)
+    );
+    const reformatChange: respacer.WhitespaceChange[] = plannedRanges
+      .flatMap((formatRange) => {
         try {
-          const doc = this.document.document;
-          const formatRange = formatter.formatDocIndexRange(doc, p, {});
-          if (!formatRange) {
-            return [];
-          }
-          const rangeKey = `${formatRange[0]}:${formatRange[1]}`;
-          if (formattedRanges.has(rangeKey)) {
-            return [];
-          }
-          formattedRanges.add(rangeKey);
           const formattedInfo = formatter.formatDocIndexesInfo(
             doc,
             true,
-            p,
-            editor.selections.map((s) => s.active).map((p) => doc.offsetAt(p)),
+            formatRange[0],
+            editor.selections.map((selection) => doc.offsetAt(selection.active)),
             {},
-            formatRange
+            formatRange,
+            !ranges.some(([start, end]) => start === formatRange[0] && end === formatRange[1])
           );
           return formattedInfo ? formattedInfo.changes : [];
-        } catch (e) {
+        } catch (error) {
+          console.error('Post-edit formatting failed', error);
           return [];
         }
       })
+      .sort((a, b) => b.start - a.start || b.end - a.end)
       .filter(
         (function () {
           // With multiple cursors, the reformat edits might overlap.
@@ -226,7 +240,6 @@ export class DocumentModel implements EditableModel {
           };
         })()
       );
-    const doc = this.document.document;
     // Do an edit transaction, even if insubstantial, just for the undoStopAfter=true.
     return editor.edit(
       (textEditorEdit) => {
@@ -305,6 +318,10 @@ export class DocumentModel implements EditableModel {
       ? surgicalRanges
       : [[0, this.document.document.getText().length]];
     const postEditPlanDraft = {
+      changedRanges: postEditChangedRanges(
+        modelEdits,
+        this.document.document.eol === 2 ? '\r\n' : '\n'
+      ),
       forDocumentVersion: this.document.document.version + 1, // none of this matters if another edit intervenes
       reformatOffsets: options.skipFormat
         ? undefined
@@ -351,14 +368,16 @@ export class DocumentModel implements EditableModel {
             }
             if (postEditPlan.reformatOffsets) {
               {
-                return this.postEditReformat(editor, postEditPlan.reformatOffsets).then(
-                  (reformatFulfilled) => {
-                    if (!reformatFulfilled) {
-                      console.warn('Post-edit reformat was not fulfilled');
-                    }
-                    return true; // because the main edit was fulfilled
+                return this.postEditReformat(
+                  editor,
+                  postEditPlan.reformatOffsets,
+                  postEditPlan.changedRanges
+                ).then((reformatFulfilled) => {
+                  if (!reformatFulfilled) {
+                    console.warn('Post-edit reformat was not fulfilled');
                   }
-                );
+                  return true; // because the main edit was fulfilled
+                });
               }
             }
           }

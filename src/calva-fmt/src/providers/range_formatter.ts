@@ -6,8 +6,8 @@ export class RangeEditProvider implements vscode.DocumentRangeFormattingEditProv
     document: vscode.TextDocument,
     range: vscode.Range,
     _options,
-    _token
+    token: vscode.CancellationToken
   ) {
-    return formatter.formatRangeEdits(document, range);
+    return formatter.formatRangeEdits(document, range, token);
   }
 }

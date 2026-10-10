@@ -18,6 +18,10 @@ export function initScanner(maxLength: number) {
   scanner = new clojureLexer.Scanner(maxLength);
 }
 
+export function getScannerMaxLength(): number {
+  return scanner.maxLength;
+}
+
 /**
  * @param text The text to look in for the end of line seq.
  * @returns The first end of line sequence found in TEXT, if any.

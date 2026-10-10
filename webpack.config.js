@@ -54,7 +54,11 @@ const CALVA_MAIN = {
 function buildConfig(isProduction) {
   const configs = [];
   if (isProduction) {
-    configs.unshift(CALVA_MAIN);
+    configs.unshift(CALVA_MAIN, {
+      ...CALVA_MAIN,
+      entry: path.resolve(__dirname, 'src/calva-fmt/src/formatter-worker.ts'),
+      output: { ...CALVA_MAIN.output, filename: 'formatter-worker.js' },
+    });
   }
   //return configs
   return configs;

@@ -71,6 +71,17 @@ export function nsRangeFromCursorDoc(
     console.error(`nsRangeFromCursorDoc: recursion depth, ${_maxRecursionDepth} , exceeded`);
     return null;
   }
+  if (_depth === 0) {
+    const input = cursorDoc.getTokenCursor(0).doc;
+    const hasNamespaceToken = input.lines.some((line) =>
+      line.tokens.some(
+        (token) => token.type === 'id' && (token.raw === 'ns' || token.raw === 'in-ns')
+      )
+    );
+    if (!hasNamespaceToken) {
+      return null;
+    }
+  }
   const cursor: tokenCursor.LispTokenCursor = cursorDoc.getTokenCursor(p);
   // Special case 1, cursor is inside the ns form
   const topLevelRange = cursor.rangeForDefun(p);
@@ -152,12 +163,20 @@ export function nsFromCursorDoc(
 
 /** [Namespace name, [start, end offset of range of the ns form]] or null */
 export function nsRangeFromText(text: string, p = text.length): [string, [number, number]] | null {
+  // Both namespace forms require a literal `ns` or `in-ns` symbol. Avoid
+  // building a token model for data that cannot contain either one.
+  if (!/\bns\b/.test(text)) {
+    return null;
+  }
   const stringDoc: model.StringDocument = new model.StringDocument(text);
   return nsRangeFromCursorDoc(stringDoc, p);
 }
 
 /** [Namespace name, text of the ns form] or null */
 export function nsFromText(text: string, p = text.length): [string, string] | null {
+  if (!/\bns\b/.test(text)) {
+    return null;
+  }
   const stringDoc: model.StringDocument = new model.StringDocument(text);
   return nsFromCursorDoc(stringDoc, p);
 }

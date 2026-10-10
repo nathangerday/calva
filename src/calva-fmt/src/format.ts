@@ -9,6 +9,7 @@ import * as cursorDocUtils from '../../cursor-doc/utilities';
 import _ = require('lodash');
 import type * as tokenCursor from '../../cursor-doc/token-cursor';
 import * as formatIndex from './format-index';
+import { formatLocalFragment } from './format-fragment';
 import * as state from '../../state';
 import * as healer from './healer';
 import * as nsForm from '../../util/ns-form';
@@ -216,7 +217,8 @@ export function formatDocIndexesInfo(
   indexOfRange: number,
   cursorIndexes: number[],
   extraConfig: CljFmtConfig = {},
-  knownFormatRange?: [number, number]
+  knownFormatRange?: [number, number],
+  localRange = false
 ) {
   const mDoc = docMirror.getDocument(doc);
   const formatRange = knownFormatRange ?? formatDocIndexRange(doc, indexOfRange, extraConfig);
@@ -226,6 +228,27 @@ export function formatDocIndexesInfo(
   const eol = _convertEolNumToStringNotation(doc.eol);
 
   const cursor = mDoc.getTokenCursor(1 + formatRange[0]);
+  if (localRange) {
+    const range = new vscode.Range(doc.positionAt(formatRange[0]), doc.positionAt(formatRange[1]));
+    const previousText = doc.getText(range);
+    const localIndexes = cursorIndexes
+      .filter((index) => index >= formatRange[0] && index < formatRange[1])
+      .map((index) => index - formatRange[0]);
+    const formattedText = formatLocalFragment(
+      previousText,
+      range.start.character,
+      localIndexes,
+      eol,
+      onType,
+      { ...config.getConfigNow(doc), ...extraConfig }
+    );
+    return {
+      formattedText,
+      previousText,
+      range,
+      changes: whitespaceAndNsEdits(eol, formatRange[0], previousText, formattedText),
+    };
+  }
   const formatted: {
     'range-text': string;
     range: number[];

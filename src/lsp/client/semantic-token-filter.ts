@@ -1,6 +1,9 @@
 export function filterCommentTokens(data: Uint32Array, remove: number) {
   const filteredData: number[] = [];
-  let accumulatedDeltaLine = 0;
+  let line = 0;
+  let start = 0;
+  let retainedLine = 0;
+  let retainedStart = 0;
 
   for (let i = 0; i < data.length; i += 5) {
     const [deltaLine, deltaStart, length, tokenType, modifiers] = [
@@ -11,19 +14,25 @@ export function filterCommentTokens(data: Uint32Array, remove: number) {
       data[i + 4],
     ];
 
-    if (tokenType == remove) {
-      accumulatedDeltaLine += deltaLine;
+    // Decode against the previous input token, including removed comments.
+    line += deltaLine;
+    start = deltaLine === 0 ? start + deltaStart : deltaStart;
+    if (tokenType === remove) {
       continue;
     }
 
+    // Encode against the previous retained token. Same-line columns are relative;
+    // columns on a new line are absolute.
+    const retainedDeltaLine = line - retainedLine;
     filteredData.push(
-      accumulatedDeltaLine === 0 ? deltaLine : deltaLine + accumulatedDeltaLine,
-      deltaStart,
+      retainedDeltaLine,
+      retainedDeltaLine === 0 ? start - retainedStart : start,
       length,
       tokenType,
       modifiers
     );
-    accumulatedDeltaLine = 0;
+    retainedLine = line;
+    retainedStart = start;
   }
 
   return filteredData;

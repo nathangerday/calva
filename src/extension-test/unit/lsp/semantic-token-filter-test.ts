@@ -2,6 +2,27 @@ import * as expectLib from 'expect';
 import * as semanticTokenFilter from '../../../lsp/client/semantic-token-filter';
 
 describe('Semantic token filtering', () => {
+  it('rebases columns after removing comments on the same line', () => {
+    const tokens = [0, 1, 1, 4, 0, 0, 3, 4, 10, 0, 0, 6, 1, 4, 0];
+    expectLib
+      .expect(semanticTokenFilter.filterCommentTokens(new Uint32Array(tokens), 10))
+      .toEqual([0, 1, 1, 4, 0, 0, 9, 1, 4, 0]);
+  });
+
+  it('preserves absolute columns when comments start a new line', () => {
+    const tokens = [0, 2, 1, 4, 0, 2, 5, 3, 10, 0, 0, 4, 2, 10, 0, 0, 3, 1, 4, 0];
+    expectLib
+      .expect(semanticTokenFilter.filterCommentTokens(new Uint32Array(tokens), 10))
+      .toEqual([0, 2, 1, 4, 0, 2, 12, 1, 4, 0]);
+  });
+
+  it('preserves columns when the first tokens are comments', () => {
+    const tokens = [0, 4, 3, 0, 0, 0, 4, 2, 0, 0, 0, 3, 1, 4, 0];
+    expectLib
+      .expect(semanticTokenFilter.filterCommentTokens(new Uint32Array(tokens), 0))
+      .toEqual([0, 11, 1, 4, 0]);
+  });
+
   it('Handles empty token array', () => {
     expectLib.expect(semanticTokenFilter.filterCommentTokens(new Uint32Array([]), 10)).toEqual([]);
   });
@@ -356,10 +377,10 @@ describe('Semantic token filtering', () => {
         4,
         0, // [q] accumulated delta from removed comment block
         3,
-        10,
+        27,
         1,
         4,
-        0, // [:d] delta from q (not accumulated from removed comments)
+        0, // [:d] absolute column after the removed comment on this line
         5,
         1,
         4,

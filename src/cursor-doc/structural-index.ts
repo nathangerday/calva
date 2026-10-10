@@ -144,6 +144,11 @@ export class StructuralIndex {
       return;
     }
     let bracket = this.byOffset.get(offset);
+    // Legacy form selection favors the preceding form at an abutting boundary.
+    // Keep its exact semantics for atoms, strings and collection delimiters.
+    if (bracket?.open && offset > 0 && !/[\s,]/.test(this.model.getText(offset - 1, offset))) {
+      return;
+    }
     if (!bracket?.open) {
       bracket = this.enclosing(offset);
     }

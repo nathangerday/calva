@@ -3,7 +3,7 @@ import * as isEqual from 'lodash.isequal';
 import * as nodeUtil from 'util';
 import * as docMirror from '../../doc-mirror/index';
 import { getStructuralIndex } from '../../cursor-doc/structural-index';
-import { visibleHighlights } from './visible';
+import { hasIndentGuide, visibleHighlights } from './visible';
 import * as utilities from '../../utilities';
 import * as pareditConfig from '../../cursor-doc/paredit-config';
 import * as config from '../../config';
@@ -246,7 +246,7 @@ function updateRainbowBrackets() {
   const { customCommentForms, aliasMap } = config.getConfig();
   const visible = activeEditor.visibleRanges.map((range): [number, number] => [
     doc.offsetAt(new vscode.Position(range.start.line, 0)),
-    doc.offsetAt(doc.lineAt(range.end.line).range.end),
+    doc.offsetAt(doc.lineAt(Math.min(range.end.line, doc.lineCount - 1)).range.end),
   ]);
   const data = visibleHighlights(index, visible, (head) =>
     pareditConfig.isCommentFormHead(head, { customCommentForms, aliasMap })
@@ -389,8 +389,8 @@ function decorateActiveGuides() {
         const start = doc.positionAt(opening.end - 1);
         const end = doc.positionAt(opening.pair.end);
         const color = placedGuidesColor.get(position_str(start));
-        if (color !== undefined && new vscode.Range(start, end).contains(selection)) {
-          if (!seen.has(opening.offset)) {
+        if (new vscode.Range(start, end).contains(selection) && hasIndentGuide(index, opening)) {
+          if (color !== undefined && !seen.has(opening.offset)) {
             seen.add(opening.offset);
             decorateGuide(doc, start, end, active[color]);
           }

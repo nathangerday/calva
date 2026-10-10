@@ -358,7 +358,11 @@ export const selectionsAfterEdits = (function () {
 /** The underlying model for the REPL readline. */
 export class LineInputModel implements EditableModel {
   /** How many characters in the line endings of the text of this model? */
-  constructor(readonly lineEndingLength: number = 1, private document?: EditableDocument) {}
+  constructor(readonly lineEndingLength: number = 1, private document?: EditableDocument) {
+    // Keep this internal cache out of structural comparisons and serialization,
+    // as the original ECMAScript private field was, without WeakMap access costs.
+    Object.defineProperty(this, 'lineOffsets', { enumerable: false });
+  }
 
   get lineEnding() {
     return this.lineEndingLength === 1 ? '\n' : '\r\n';
@@ -366,6 +370,9 @@ export class LineInputModel implements EditableModel {
 
   /** The input lines. */
   lines: TextLine[] = [new TextLine('', this.getStateForLine(0))];
+
+  /** Prefix sums of line lengths, built lazily and invalidated after edits. */
+  private lineOffsets: number[] = [0];
 
   /** Lines whose text has changed. */
   changedLines: Set<number> = new Set();
@@ -492,11 +499,12 @@ export class LineInputModel implements EditableModel {
    * @param line the line who's offset will be returned.
    */
   getOffsetForLine(line: number) {
-    let max = 0;
-    for (let i = 0; i < line; i++) {
-      max += this.lines[i].text.length + this.lineEndingLength;
+    for (let i = this.lineOffsets.length - 1; i < line; i++) {
+      this.lineOffsets.push(
+        this.lineOffsets[i] + this.lines[i].text.length + this.lineEndingLength
+      );
     }
-    return max;
+    return this.lineOffsets[Math.max(0, line)];
   }
 
   /**
@@ -544,12 +552,25 @@ export class LineInputModel implements EditableModel {
    * Returns the row and column for a given text offset in this model.
    */
   getRowCol(offset: number): [row: number, col: number] {
-    for (let i = 0; i < this.lines.length; i++) {
-      if (offset > this.lines[i].text.length) {
-        offset -= this.lines[i].text.length + this.lineEndingLength;
+    const offsets = this.lineOffsets;
+    // Extend only until the requested offset is covered. Rebuilding the whole
+    // suffix for every edit makes multi-cursor edits near the start expensive.
+    while (offsets.length <= this.lines.length && offsets[offsets.length - 1] <= offset) {
+      const line = offsets.length - 1;
+      offsets.push(offsets[line] + this.lines[line].text.length + this.lineEndingLength);
+    }
+    let low = 0;
+    let high = Math.min(this.lines.length, offsets.length);
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      if (offset > offsets[mid] + this.lines[mid].text.length) {
+        low = mid + 1;
       } else {
-        return [i, offset];
+        high = mid;
       }
+    }
+    if (low < this.lines.length) {
+      return [low, offset - offsets[low]];
     }
     return [this.lines.length - 1, this.lines[this.lines.length - 1].text.length];
   }
@@ -713,6 +734,7 @@ export class LineInputModel implements EditableModel {
 
     // now splice in our edited lines
     this.lines.splice(startLine, endLine - startLine + 1, ...items);
+    this.lineOffsets.length = Math.min(this.lineOffsets.length, startLine + 1);
 
     // set the changed and dirty marker
     for (let i = 0; i < items.length; i++) {
@@ -760,11 +782,7 @@ export class LineInputModel implements EditableModel {
 
   /** Return the offset of the last character in this model. */
   get maxOffset() {
-    let max = 0;
-    for (let i = 0; i < this.lines.length; i++) {
-      max += this.lines[i].text.length + this.lineEndingLength;
-    }
-    return max - 1;
+    return this.getOffsetForLine(this.lines.length) - 1;
   }
 
   public getTokenCursor(offset: number, previous: boolean = false) {

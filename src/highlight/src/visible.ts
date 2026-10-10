@@ -2,6 +2,28 @@ import type { IndexedBracket, StructuralIndex } from '../../cursor-doc/structura
 
 type Range = [number, number];
 const ignoredRanges = new WeakMap<StructuralIndex, { range: Range; topLevel: boolean }[]>();
+const indentGuides = new WeakMap<StructuralIndex, Map<IndexedBracket, boolean>>();
+
+/** Whether a form has a guide anywhere, even when its lines are off-screen. */
+export function hasIndentGuide(index: StructuralIndex, opening: IndexedBracket): boolean {
+  let cache = indentGuides.get(index);
+  if (!cache) {
+    cache = new Map();
+    indentGuides.set(index, cache);
+  }
+  if (!cache.has(opening)) {
+    const column = index.model.getRowCol(opening.end - 1)[1];
+    let found = false;
+    for (let line = opening.line + 1; opening.pair && line <= opening.pair.line; line++) {
+      if (index.model.lines[line].text.match(/^ */)[0].length >= column) {
+        found = true;
+        break;
+      }
+    }
+    cache.set(opening, found);
+  }
+  return cache.get(opening);
+}
 
 function ignores(index: StructuralIndex) {
   let result = ignoredRanges.get(index);
@@ -72,9 +94,11 @@ export function visibleHighlights(
       }
     }
   }
+  let commentEnd = -1;
   for (const candidate of index.commentCandidates) {
-    if (candidate.pair && isCommentHead(candidate.head)) {
+    if (candidate.readerStart >= commentEnd && candidate.pair && isCommentHead(candidate.head)) {
       clip([candidate.readerStart, candidate.pair.end], comments);
+      commentEnd = candidate.pair.end;
     }
   }
   for (const item of ignores(index)) {

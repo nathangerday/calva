@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import { StringDocument, initScanner } from '../../../cursor-doc/model';
 import { getStructuralIndex } from '../../../cursor-doc/structural-index';
-import { visibleHighlights } from '../../../highlight/src/visible';
+import { hasIndentGuide, visibleHighlights } from '../../../highlight/src/visible';
 
 initScanner(20000);
 
@@ -76,9 +76,52 @@ describe('Cached structural index', () => {
     assert.strictEqual(cursor(0).atTopLevel(), true);
     assert.strictEqual(cursor(4).atTopLevel(), false);
   });
+
+  it('retains legacy form selection where adjacent forms touch', () => {
+    for (const [text, offset, expected] of [
+      ['(a)(b)', 3, [0, 3]],
+      ['[1 2](foo)', 5, [0, 5]],
+      ['"a""b"', 3, [0, 3]],
+      ['x(a)', 1, [0, 1]],
+    ] as [string, number, [number, number]][]) {
+      const index = indexed(text);
+      assert.deepStrictEqual(
+        index.model.getTokenCursor(offset).rangeForDefun(offset, false),
+        expected
+      );
+    }
+  });
 });
 
 describe('Visible structural highlighting', () => {
+  it('decorates each nested comment form only once, including clipped viewports', () => {
+    const text = '(comment (comment (x))) (custom (comment (y)))';
+    const index = indexed(text);
+    const heads = (head: string) => ['comment', 'custom'].includes(head);
+    const split = text.indexOf(' (custom');
+    assert.deepStrictEqual(visibleHighlights(index, [[0, text.length]], heads).comments, [
+      [0, split],
+      [split + 1, text.length],
+    ]);
+    const start = text.indexOf('(comment', 1);
+    assert.deepStrictEqual(visibleHighlights(index, [[start, start + 3]], heads).comments, [
+      [start, start + 3],
+    ]);
+  });
+
+  it('retains guide eligibility when all of a form’s guide lines are off-screen', () => {
+    const index = indexed('(do\n  (f\n   x))');
+    const opening = index.byOffset.get(index.model.getText(0, 100).indexOf('(f'));
+    const end = index.model.getOffsetForLine(2);
+    assert.strictEqual(hasIndentGuide(index, opening), true);
+    const visible = visibleHighlights(index, [[0, end - 1]], () => false);
+    assert.ok(visible.guidePairs.has(opening));
+    const withoutGuide = indexed('(do\n  (f\nx))');
+    assert.strictEqual(
+      hasIndentGuide(withoutGuide, withoutGuide.byOffset.get(opening.offset)),
+      false
+    );
+  });
   it('bounds bracket painting to the viewport and retains off-screen partners and guides', () => {
     const text = `{\n${Array.from({ length: 2000 }, (_, i) => ` :key${i} [1 2]`).join('\n')}\n}`;
     const index = indexed(text);

@@ -75,7 +75,9 @@ function alignSpacedUnits(
 ): [SpacedUnit[], SpacedUnit[]] {
   const a2: SpacedUnit[] = [],
     b2: SpacedUnit[] = [];
-  while (a.length && b.length) {
+  let aIndex = 0;
+  let bIndex = 0;
+  while (aIndex < a.length && bIndex < b.length) {
     // To the degree the next word in a and b is preceded by multi-line whitespace,
     // subdivide it into lines, so that reformatting's changes to each
     // of those lines will be a distinct text edit,
@@ -83,52 +85,76 @@ function alignSpacedUnits(
     // we'd like VS Code to shift the cursors minimally.
     let sawEol = false;
     while (true) {
-      const aSpaceFirstLineLength = a[0][0].indexOf(eol);
-      const bSpaceFirstLineLength = b[0][0].indexOf(eol);
+      const aSpaceFirstLineLength = a[aIndex][0].indexOf(eol);
+      const bSpaceFirstLineLength = b[bIndex][0].indexOf(eol);
       if (aSpaceFirstLineLength == -1 || bSpaceFirstLineLength == -1) {
         break;
       } else {
-        a2.push([a[0][0].substring(0, aSpaceFirstLineLength), eol, sawEol]);
-        b2.push([b[0][0].substring(0, bSpaceFirstLineLength), eol, sawEol]);
-        a[0][0] = a[0][0].substring(aSpaceFirstLineLength + eol.length);
-        b[0][0] = b[0][0].substring(bSpaceFirstLineLength + eol.length);
+        a2.push([a[aIndex][0].substring(0, aSpaceFirstLineLength), eol, sawEol]);
+        b2.push([b[bIndex][0].substring(0, bSpaceFirstLineLength), eol, sawEol]);
+        a[aIndex][0] = a[aIndex][0].substring(aSpaceFirstLineLength + eol.length);
+        b[bIndex][0] = b[bIndex][0].substring(bSpaceFirstLineLength + eol.length);
         sawEol = true;
       }
     }
-    if (a[0][1] == b[0][1]) {
+    if (a[aIndex][1] == b[bIndex][1]) {
       // same substance in a and b
-      a2.push(a[0]);
-      b2.push(b[0]);
-      a.shift();
-      b.shift();
-    } else if (a[0][1].length < b[0][1].length) {
+      a2.push(a[aIndex++]);
+      b2.push(b[bIndex++]);
+    } else if (a[aIndex][1].length < b[bIndex][1].length) {
       // a's substance is a prefix of b's
-      const aWhole = a[0][1];
-      const bPart = b[0][1].slice(0, a[0][1].length);
+      const aWhole = a[aIndex][1];
+      const bPart = b[bIndex][1].slice(0, aWhole.length);
       if (aWhole == bPart) {
-        a2.push(a[0]);
-        a.shift();
-        b2.push([b[0][0], bPart, false]);
-        b[0] = ['', b[0][1].slice(aWhole.length), false];
+        a2.push(a[aIndex++]);
+        b2.push([b[bIndex][0], bPart, false]);
+        b[bIndex] = ['', b[bIndex][1].slice(aWhole.length), false];
       } else {
         // mismatched text. Stuff entire remainder in the next 'space' item:
-        a2.push([a.map((a_item) => a_item[0] + a_item[1]).join(''), '', false]);
-        b2.push([b.map((b_item) => b_item[0] + b_item[1]).join(''), '', false]);
+        a2.push([
+          a
+            .slice(aIndex)
+            .map((a_item) => a_item[0] + a_item[1])
+            .join(''),
+          '',
+          false,
+        ]);
+        b2.push([
+          b
+            .slice(bIndex)
+            .map((b_item) => b_item[0] + b_item[1])
+            .join(''),
+          '',
+          false,
+        ]);
         break;
       }
     } else {
       // b's substance is a prefix of a's
-      const bWhole = b[0][1];
-      const aPart = a[0][1].slice(0, b[0][1].length);
+      const bWhole = b[bIndex][1];
+      const aPart = a[aIndex][1].slice(0, bWhole.length);
       if (bWhole == aPart) {
-        b2.push(b[0]);
-        b.shift();
-        a2.push([a[0][0], aPart, false]);
-        a[0] = ['', a[0][1].slice(bWhole.length), false];
+        b2.push(b[bIndex++]);
+        a2.push([a[aIndex][0], aPart, false]);
+        a[aIndex] = ['', a[aIndex][1].slice(bWhole.length), false];
       } else {
         // mismatched text. Stuff entire remainder in the next 'space' item:
-        a2.push([a.map((a_item) => a_item[0] + a_item[1]).join(''), '', false]);
-        b2.push([b.map((b_item) => b_item[0] + b_item[1]).join(''), '', false]);
+        a2.push([
+          a
+            .slice(aIndex)
+            .map((a_item) => a_item[0] + a_item[1])
+            .join(''),
+          '',
+          false,
+        ]);
+        b2.push([
+          b
+            .slice(bIndex)
+            .map((b_item) => b_item[0] + b_item[1])
+            .join(''),
+          '',
+          false,
+        ]);
         break;
       }
     }
@@ -171,9 +197,9 @@ export function whitespaceEdits(
       const start: number = aPos;
       const end: number = aPos + aSpaces.length;
       const text: string = bSpaces;
-      ret.unshift({ start, end, text });
+      ret.push({ start, end, text });
     }
     aPos += a2[i][0].length + a2[i][1].length;
   }
-  return ret;
+  return ret.reverse();
 }

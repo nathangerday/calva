@@ -215,10 +215,11 @@ export function formatDocIndexesInfo(
   onType: boolean,
   indexOfRange: number,
   cursorIndexes: number[],
-  extraConfig: CljFmtConfig = {}
+  extraConfig: CljFmtConfig = {},
+  knownFormatRange?: [number, number]
 ) {
   const mDoc = docMirror.getDocument(doc);
-  const formatRange = formatDocIndexRange(doc, indexOfRange, extraConfig);
+  const formatRange = knownFormatRange ?? formatDocIndexRange(doc, indexOfRange, extraConfig);
   if (!formatRange || (formatRange[0] == -1 && formatRange[1] == -1)) {
     return;
   }

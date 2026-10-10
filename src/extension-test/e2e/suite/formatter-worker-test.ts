@@ -86,6 +86,71 @@ suite('Large formatter worker suite', () => {
     assert.strictEqual(editor.document.getText(), ';user edit\n' + content);
   });
 
+  test('keeps progress hidden when a large formatter request completes quickly', async () => {
+    const editor = await open();
+    const request = formatterWorker.request;
+    const withProgress = vscode.window.withProgress;
+    let shown = false;
+    formatterWorker.request = () => ({
+      promise: Promise.resolve({
+        formattedText: content,
+        previousText: content,
+        range: [0, content.length],
+        changes: [],
+      }),
+      cancel: () => undefined,
+    });
+    vscode.window.withProgress = (options, task) => {
+      shown = true;
+      return withProgress(options, task);
+    };
+    try {
+      assert.strictEqual(await formatter.formatPosition(editor), true);
+      await sleep(850);
+      assert.strictEqual(shown, false);
+    } finally {
+      formatterWorker.request = request;
+      vscode.window.withProgress = withProgress;
+    }
+  });
+
+  test('shows delayed progress and cancels formatting without changing user text', async () => {
+    const editor = await open();
+    const withProgress = vscode.window.withProgress;
+    const source = new vscode.CancellationTokenSource();
+    let shown = false;
+    let finished = false;
+    vscode.window.withProgress = (options, task) => {
+      shown = true;
+      assert.strictEqual(options.location, vscode.ProgressLocation.Notification);
+      assert.strictEqual(options.cancellable, true);
+      assert.strictEqual(options.title, `Calva: Formatting ${editor.document.fileName}`);
+      return withProgress(options, async (progress, token) => {
+        const cancellation = token.onCancellationRequested(() => source.cancel());
+        try {
+          return await task(progress, source.token);
+        } finally {
+          cancellation.dispose();
+          finished = true;
+        }
+      });
+    };
+    try {
+      const pending = formatter.formatPosition(editor);
+      assert.strictEqual(shown, false);
+      await sleep(100);
+      assert.strictEqual(shown, false);
+      await waitForCondition(() => shown);
+      source.cancel();
+      assert.strictEqual(await pending, false);
+      await waitForCondition(() => finished);
+      assert.strictEqual(editor.document.getText(), content);
+    } finally {
+      source.dispose();
+      vscode.window.withProgress = withProgress;
+    }
+  });
+
   for (const command of ['format', 'paredit']) {
     test(`switching tabs during ${command} keeps user edits without a closed-editor error`, async () => {
       let editor: vscode.TextEditor;

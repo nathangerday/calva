@@ -20,11 +20,11 @@ suite('Semantic token middleware', () => {
     sinon.restore();
   });
 
-  const clientWithLegend = (tokenTypes: string[]) => {
+  const clientWithLegend = (tokenTypes: string[], serverPath = process.execPath) => {
     const client = createClient({
       id: 'semantic-token-test',
       uri: vscode.Uri.file(__dirname),
-      lsp_server_path: process.execPath,
+      lsp_server_path: serverPath,
     }).client;
     clients.push(client);
     sinon.stub(client, 'initializeResult').get(() => ({
@@ -47,6 +47,20 @@ suite('Semantic token middleware', () => {
       new vscode.CancellationTokenSource().token,
       () => tokens
     );
+
+  test('a JAR client can start without JAVA_HOME', () => {
+    const javaHome = process.env.JAVA_HOME;
+    try {
+      delete process.env.JAVA_HOME;
+      clientWithLegend(['keyword'], '/tmp/clojure-lsp.jar');
+    } finally {
+      if (javaHome === undefined) {
+        delete process.env.JAVA_HOME;
+      } else {
+        process.env.JAVA_HOME = javaHome;
+      }
+    }
+  });
 
   test('full and range providers retain columns with comment at legend index zero', async () => {
     const client = clientWithLegend(['comment', 'keyword']);

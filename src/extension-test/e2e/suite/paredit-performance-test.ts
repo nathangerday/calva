@@ -2,6 +2,8 @@ import * as assert from 'assert';
 import * as vscode from 'vscode';
 import * as highlight from '../../../highlight/src/extension';
 import * as testUtil from './util';
+import * as formatter from '../../../calva-fmt/src/format';
+import * as sinon from 'sinon';
 
 async function measureCommandAndDecorations(
   editor: vscode.TextEditor,
@@ -32,6 +34,36 @@ async function measureCommandAndDecorations(
 }
 
 suite('Paredit performance suite', () => {
+  test('slurping in a large map formats each enclosing range once', async function () {
+    await vscode.extensions.getExtension('betterthantomorrow.calva')?.activate();
+    const items = Array.from(
+      { length: 2000 },
+      (_, i) => ` "key${i}" {:code "${i}",\n :label "Entry ${i}",\n :children ["a" "b"]}`
+    );
+    const content = `{\n${items.join('\n')}\n}`;
+    const document = await vscode.workspace.openTextDocument({ language: 'clojure', content });
+    const editor = await vscode.window.showTextDocument(document);
+    await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
+    const formatSpy = sinon.spy(formatter, 'formatDocIndexesInfo');
+    try {
+      await testUtil.waitForCondition(() => highlight.activeEditor?.document === document);
+      const position = document.positionAt(content.indexOf(':children [') + ':children ['.length);
+      editor.selection = new vscode.Selection(position, position);
+      await testUtil.sleep(250);
+      const startedAt = performance.now();
+      await vscode.commands.executeCommand('paredit.slurpSexpForward');
+      await testUtil.sleep(32);
+      const elapsedMs = performance.now() - startedAt;
+      assert.notStrictEqual(document.getText(), content);
+      assert.strictEqual(formatSpy.callCount, 1, 'the same enclosing map was formatted repeatedly');
+      assert.ok(elapsedMs < 5000, `slurp and decorations took ${elapsedMs.toFixed(0)}ms`);
+      testUtil.log('Paredit performance', `large map slurp took ${elapsedMs.toFixed(0)}ms`);
+    } finally {
+      formatSpy.restore();
+      await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor');
+    }
+  });
+
   test('many cursors remain responsive', async function () {
     await vscode.extensions.getExtension('betterthantomorrow.calva')?.activate();
 
@@ -42,6 +74,7 @@ suite('Paredit performance suite', () => {
       content: `[\n${items.join('\n')}\n]`,
     });
     const editor = await vscode.window.showTextDocument(document);
+    await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
 
     try {
       await testUtil.waitForCondition(() => highlight.activeEditor?.document === document);

@@ -178,15 +178,27 @@ export class DocumentModel implements EditableModel {
 
   private postEditReformat(editor: vscode.TextEditor, offsets: number[]): Thenable<boolean> {
     // Now that the document has been edited, calculate the reformatting:
+    const formattedRanges = new Set<string>();
     const reformatChange: respacer.WhitespaceChange[] = _.sortedUniq(offsets.sort((a, b) => b - a))
       .flatMap((p) => {
         try {
           const doc = this.document.document;
+          const formatRange = formatter.formatDocIndexRange(doc, p, {});
+          if (!formatRange) {
+            return [];
+          }
+          const rangeKey = `${formatRange[0]}:${formatRange[1]}`;
+          if (formattedRanges.has(rangeKey)) {
+            return [];
+          }
+          formattedRanges.add(rangeKey);
           const formattedInfo = formatter.formatDocIndexesInfo(
             doc,
             true,
             p,
-            editor.selections.map((s) => s.active).map((p) => doc.offsetAt(p))
+            editor.selections.map((s) => s.active).map((p) => doc.offsetAt(p)),
+            {},
+            formatRange
           );
           return formattedInfo ? formattedInfo.changes : [];
         } catch (e) {

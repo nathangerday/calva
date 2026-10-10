@@ -183,13 +183,15 @@ export class DocumentModel implements EditableModel {
     }
   }
 
-  private postEditReformat(
+  private async postEditReformat(
     editor: vscode.TextEditor,
     offsets: number[],
     changedRanges: ModelEditRange[]
-  ): Thenable<boolean> {
+  ): Promise<boolean> {
     // Now that the document has been edited, calculate the reformatting:
     const doc = this.document.document;
+    const version = doc.version;
+    const cursorOffsets = editor.selections.map((s) => doc.offsetAt(s.active));
     const ranges = mergeFormatRanges(
       offsets
         .map((p) => formatter.formatDocIndexRange(doc, p, {}))
@@ -201,24 +203,30 @@ export class DocumentModel implements EditableModel {
       changedRanges,
       formatterConfig.getConfigNow(doc)
     );
-    const reformatChange: respacer.WhitespaceChange[] = plannedRanges
-      .flatMap((formatRange) => {
-        try {
-          const formattedInfo = formatter.formatDocIndexesInfo(
-            doc,
-            true,
-            formatRange[0],
-            editor.selections.map((selection) => doc.offsetAt(selection.active)),
-            {},
-            formatRange,
-            !ranges.some(([start, end]) => start === formatRange[0] && end === formatRange[1])
-          );
-          return formattedInfo ? formattedInfo.changes : [];
-        } catch (error) {
-          console.error('Post-edit formatting failed', error);
-          return [];
+    const changes: respacer.WhitespaceChange[] = [];
+    for (const formatRange of plannedRanges) {
+      try {
+        const info = await formatter.formatDocIndexesInfo(
+          doc,
+          true,
+          formatRange[0],
+          cursorOffsets,
+          {},
+          formatRange,
+          !ranges.some(([start, end]) => start === formatRange[0] && end === formatRange[1])
+        );
+        if (!info || doc.isClosed || doc.version !== version) {
+          return false;
         }
-      })
+        changes.push(...info.changes);
+      } catch (error) {
+        console.error('Post-edit formatting failed', error);
+      }
+      if (doc.isClosed || doc.version !== version) {
+        return false;
+      }
+    }
+    const reformatChange = changes
       .sort((a, b) => b.start - a.start || b.end - a.end)
       .filter(
         (function () {
@@ -240,6 +248,10 @@ export class DocumentModel implements EditableModel {
           };
         })()
       );
+    // The captured editor can be disposed while the formatter worker is running.
+    if (!vscode.window.visibleTextEditors.includes(editor)) {
+      return false;
+    }
     // Do an edit transaction, even if insubstantial, just for the undoStopAfter=true.
     return editor.edit(
       (textEditorEdit) => {

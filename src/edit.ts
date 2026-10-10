@@ -399,7 +399,11 @@ async function reformatRanges(editor: vscode.TextEditor, ranges: OffsetRange[]) 
       editor.document.positionAt(start),
       editor.document.positionAt(end)
     );
-    const edits = format.formatRangeEdits(editor.document, range);
+    const version = editor.document.version;
+    const edits = await format.formatRangeEdits(editor.document, range);
+    if (!edits || editor.document.isClosed || editor.document.version !== version) {
+      return;
+    }
     const isLast = i === ranges.length - 1;
 
     if (!edits || edits.length === 0) {

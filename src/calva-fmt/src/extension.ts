@@ -6,6 +6,7 @@ import * as inferer from './infer';
 import * as docmirror from '../../doc-mirror/index';
 import * as config from '../../formatter-config';
 import * as calvaConfig from '../../config';
+import { formatterWorker } from './worker-client';
 
 function isOldIndentEngineInPlay(): boolean {
   return (
@@ -40,25 +41,26 @@ function getLanguageConfiguration(): vscode.LanguageConfiguration {
 }
 
 export function activate(context: vscode.ExtensionContext) {
+  context.subscriptions.push(formatterWorker);
   docmirror.activate();
   vscode.languages.setLanguageConfiguration('clojure', getLanguageConfiguration());
   context.subscriptions.push(
-    vscode.commands.registerTextEditorCommand(
-      'calva-fmt.formatCurrentForm',
-      formatter.formatPositionCommand
-    )
+    vscode.commands.registerCommand('calva-fmt.formatCurrentForm', () => {
+      const editor = vscode.window.activeTextEditor;
+      return editor ? formatter.formatPositionCommand(editor) : false;
+    })
   );
   context.subscriptions.push(
-    vscode.commands.registerTextEditorCommand(
-      'calva-fmt.alignCurrentForm',
-      formatter.alignPositionCommand
-    )
+    vscode.commands.registerCommand('calva-fmt.alignCurrentForm', () => {
+      const editor = vscode.window.activeTextEditor;
+      return editor ? formatter.alignPositionCommand(editor) : false;
+    })
   );
   context.subscriptions.push(
-    vscode.commands.registerTextEditorCommand(
-      'calva-fmt.trimCurrentFormWhiteSpace',
-      formatter.trimWhiteSpacePositionCommand
-    )
+    vscode.commands.registerCommand('calva-fmt.trimCurrentFormWhiteSpace', () => {
+      const editor = vscode.window.activeTextEditor;
+      return editor ? formatter.trimWhiteSpacePositionCommand(editor) : false;
+    })
   );
   context.subscriptions.push(
     vscode.commands.registerTextEditorCommand('calva-fmt.inferParens', inferer.inferParensCommand)

@@ -736,11 +736,12 @@ export class LineInputModel implements EditableModel {
     this.lines.splice(startLine, endLine - startLine + 1, ...items);
     this.lineOffsets.length = Math.min(this.lineOffsets.length, startLine + 1);
 
-    // set the changed and dirty marker
+    // New lines have already been tokenized in order. Only their last boundary
+    // needs a flush, which propagates a changed lexical state to following lines.
     for (let i = 0; i < items.length; i++) {
       this.changedLines.add(startLine + i);
-      this.markDirty(startLine + i);
     }
+    this.markDirty(startLine + items.length - 1);
   }
 
   /**

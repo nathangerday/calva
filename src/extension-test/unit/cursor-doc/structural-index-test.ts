@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { StringDocument, initScanner } from '../../../cursor-doc/model';
-import { getStructuralIndex } from '../../../cursor-doc/structural-index';
+import { getStructuralIndex, StructuralIndex } from '../../../cursor-doc/structural-index';
 import { hasIndentGuide, visibleHighlights } from '../../../highlight/src/visible';
 
 initScanner(20000);
@@ -10,6 +10,166 @@ function indexed(text: string) {
   model.flushChanges();
   return getStructuralIndex(model);
 }
+
+function state(index: StructuralIndex) {
+  return {
+    balanced: index.balanced,
+    navigationSafe: index.navigationSafe,
+    comments: index.hasLineComments,
+    multilineStrings: index.hasMultilineStrings,
+    brackets: index.brackets.map((b) => ({
+      offset: b.offset,
+      end: b.end,
+      readerStart: b.readerStart,
+      line: b.line,
+      token: b.token,
+      raw: b.raw,
+      open: b.open,
+      string: b.string,
+      depth: b.depth,
+      parent: b.parent?.offset,
+      pair: b.pair?.offset,
+      head: b.head,
+    })),
+    ignores: index.ignores.map((ignore) => ({ ...ignore })),
+    heads: index.commentCandidates.map((b) => [b.offset, b.head]),
+  };
+}
+
+function assertMatchesRebuild(index: StructuralIndex) {
+  const rebuilt = new StructuralIndex(index.model);
+  assert.deepStrictEqual(state(index), state(rebuilt));
+  const end = index.model.maxOffset;
+  for (const offset of [0, Math.floor(end / 3), Math.floor((2 * end) / 3), end]) {
+    assert.strictEqual(index.byOffset.get(offset)?.offset, rebuilt.byOffset.get(offset)?.offset);
+    assert.strictEqual(index.enclosing(offset)?.offset, rebuilt.enclosing(offset)?.offset);
+    assert.strictEqual(index.openingAt(offset)?.offset, rebuilt.openingAt(offset)?.offset);
+    assert.deepStrictEqual(index.topLevelRange(offset), rebuilt.topLevelRange(offset));
+  }
+  const visible = (value: StructuralIndex) => {
+    const data = visibleHighlights(value, [[0, end]], (head) => head === 'comment');
+    return { ...data, guidePairs: [...data.guidePairs].map((b) => b.offset).sort((a, b) => a - b) };
+  };
+  assert.deepStrictEqual(visible(index), visible(rebuilt));
+  for (const opening of index.openings) {
+    assert.strictEqual(
+      index.formattingSafe(opening),
+      rebuilt.formattingSafe(rebuilt.byOffset.get(opening.offset))
+    );
+  }
+}
+
+describe('Incremental structural positions', () => {
+  for (const eol of ['\n', '\r\n']) {
+    it(`retains pairing through atom edits and line splits/joins with ${JSON.stringify(
+      eol
+    )}`, () => {
+      const text = `[${eol}${Array.from({ length: 1500 }, (_, i) => ` [${i} "value"]`).join(
+        eol
+      )}${eol}]`;
+      const index = indexed(text);
+      const close = index.brackets[index.brackets.length - 1];
+      const edit = text.indexOf('750');
+      index.model.insertString(edit, '9');
+      index.model.flushChanges();
+      assert.strictEqual(getStructuralIndex(index.model), index);
+      assert.strictEqual(close.offset, text.length);
+      assertMatchesRebuild(index);
+      const split = index.model.getOffsetForLine(752);
+      index.model.insertString(split, eol + ' ');
+      index.model.flushChanges();
+      assert.strictEqual(getStructuralIndex(index.model), index);
+      assertMatchesRebuild(index);
+      index.model.deleteRange(split, eol.length + 1);
+      index.model.flushChanges();
+      assert.strictEqual(getStructuralIndex(index.model), index);
+      assertMatchesRebuild(index);
+    });
+  }
+
+  it('refreshes comment heads, ignored ranges and indent-guide caches', () => {
+    const index = indexed('#_ [1]\n(comment\n (f\nx))');
+    visibleHighlights(index, [[0, index.model.maxOffset]], (head) => head === 'comment');
+    index.model.insertString(5, '9');
+    index.model.flushChanges();
+    assert.strictEqual(getStructuralIndex(index.model), index);
+    assertMatchesRebuild(index);
+    const head = index.model.getText(0, index.model.maxOffset).indexOf('comment');
+    index.model.editNow([{ editFn: 'changeRange', args: [head, head + 7, 'custom'] }], {});
+    index.model.flushChanges();
+    assert.strictEqual(getStructuralIndex(index.model), index);
+    assertMatchesRebuild(index);
+    const lastLine = index.model.getOffsetForLine(3);
+    index.model.insertString(lastLine, '  ');
+    index.model.flushChanges();
+    assert.strictEqual(getStructuralIndex(index.model), index);
+    assertMatchesRebuild(index);
+  });
+
+  it('rebuilds when an empty single-line string becomes multiline', () => {
+    const index = indexed('[""]');
+    index.model.insertString(2, '\n');
+    index.model.flushChanges();
+    const next = getStructuralIndex(index.model);
+    assert.notStrictEqual(next, index);
+    assert.ok(next.hasMultilineStrings);
+    assertMatchesRebuild(next);
+  });
+
+  it('matches full rebuilds through deterministic mixed edits, lexical propagation and malformed input', () => {
+    let seed = 17291;
+    const random = (limit: number) => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return seed % limit;
+    };
+    const fragments = [
+      ' ',
+      ',',
+      '\n',
+      '\r\n',
+      'x',
+      '12',
+      '😀',
+      '"',
+      '\\',
+      '#_',
+      '#tag ',
+      '^:m ',
+      '; note',
+      '[',
+      ']',
+      '(',
+      ')',
+      '{',
+      '}',
+    ];
+    for (const text of [
+      '#tag [😀 {:a "hi" :b [1 2]}]\n(comment (x))',
+      '["one\ntwo" ""]\n#_ (ignored)',
+      '([)]\n^:m [x]',
+    ]) {
+      const doc = new StringDocument(text);
+      doc.model.flushChanges();
+      for (let i = 0; i < 450; i++) {
+        const current = getStructuralIndex(doc.model);
+        visibleHighlights(current, [[0, doc.model.maxOffset]], (head) => head === 'comment');
+        const start = random(doc.model.maxOffset + 1);
+        const removed = random(Math.min(5, doc.model.maxOffset - start) + 1);
+        doc.model.editNow(
+          [
+            {
+              editFn: 'changeRange',
+              args: [start, start + removed, fragments[random(fragments.length)]],
+            },
+          ],
+          {}
+        );
+        doc.model.flushChanges();
+        assertMatchesRebuild(getStructuralIndex(doc.model));
+      }
+    }
+  });
+});
 
 describe('Cached structural index', () => {
   it('indexes nesting, strings, reader prefixes and UTF-16 offsets', () => {

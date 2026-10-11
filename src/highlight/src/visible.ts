@@ -1,15 +1,15 @@
 import type { IndexedBracket, StructuralIndex } from '../../cursor-doc/structural-index';
 
 type Range = [number, number];
-const ignoredRanges = new WeakMap<StructuralIndex, { range: Range; topLevel: boolean }[]>();
-const indentGuides = new WeakMap<StructuralIndex, Map<IndexedBracket, boolean>>();
+const ignoredRanges = new WeakMap<object, { range: Range; topLevel: boolean }[]>();
+const indentGuides = new WeakMap<object, Map<IndexedBracket, boolean>>();
 
 /** Whether a form has a guide anywhere, even when its lines are off-screen. */
 export function hasIndentGuide(index: StructuralIndex, opening: IndexedBracket): boolean {
-  let cache = indentGuides.get(index);
+  let cache = indentGuides.get(index.cacheKey);
   if (!cache) {
     cache = new Map();
-    indentGuides.set(index, cache);
+    indentGuides.set(index.cacheKey, cache);
   }
   if (!cache.has(opening)) {
     const column = index.model.getRowCol(opening.end - 1)[1];
@@ -26,7 +26,7 @@ export function hasIndentGuide(index: StructuralIndex, opening: IndexedBracket):
 }
 
 function ignores(index: StructuralIndex) {
-  let result = ignoredRanges.get(index);
+  let result = ignoredRanges.get(index.cacheKey);
   if (!result) {
     result = index.ignores.map(({ offset, topLevel }) => {
       const cursor = index.model.getTokenCursor(offset);
@@ -41,7 +41,7 @@ function ignores(index: StructuralIndex) {
       }
       return { range: [offset, cursor.offsetStart] as Range, topLevel };
     });
-    ignoredRanges.set(index, result);
+    ignoredRanges.set(index.cacheKey, result);
   }
   return result;
 }

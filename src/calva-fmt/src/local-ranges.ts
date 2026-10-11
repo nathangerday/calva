@@ -47,13 +47,13 @@ export function mergeFormatRanges(ranges: FormatRange[]): FormatRange[] {
 }
 
 type Child = { range: FormatRange; firstLine: number; lastLine: number };
-const childIndexes = new WeakMap<StructuralIndex, Map<IndexedBracket, Child[]>>();
+const childIndexes = new WeakMap<object, Map<IndexedBracket, Child[]>>();
 
 function children(index: StructuralIndex, opening: IndexedBracket): Child[] {
-  let cache = childIndexes.get(index);
+  let cache = childIndexes.get(index.cacheKey);
   if (!cache) {
     cache = new Map();
-    childIndexes.set(index, cache);
+    childIndexes.set(index.cacheKey, cache);
   }
   let result = cache.get(opening);
   if (!result) {

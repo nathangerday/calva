@@ -1,9 +1,9 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
-import { LineInputModel, StringDocument, initScanner } from '../../../cursor-doc/model';
+import { LineInputModel, ModelEdit, StringDocument, initScanner } from '../../../cursor-doc/model';
 import { getIndent } from '../../../cursor-doc/indent';
-import { newlineInsertion } from '../../../calva-fmt/src/newline';
+import { newlineInsertion, newlineInsertions } from '../../../calva-fmt/src/newline';
 import type { FormatterConfig } from '../../../formatter-config';
 
 initScanner(20000);
@@ -18,6 +18,53 @@ function plan(notation: string, options = config) {
 }
 
 describe('newline indentation', () => {
+  for (const eol of ['\n', '\r\n']) {
+    for (const [notation, expected] of [
+      ['(foo |bar |baz)', '(foo \n bar \n baz)'],
+      ['[a |[b |c]]', '[a \n [b \n  c]]'],
+      ['[a |[b\n |c]]', '[a \n [b\n \n  c]]'],
+      ['[|] [|]', '[\n \n] [\n   \n]'],
+    ]) {
+      it(`plans dependent cursors in ${notation} with ${JSON.stringify(eol)}`, () => {
+        const text = notation.replace(/\|/g, '').replace(/\n/g, eol);
+        const offsets: number[] = [];
+        for (const match of notation.matchAll(/\|/g)) {
+          offsets.push(
+            notation.slice(0, match.index).replace(/\|/g, '').replace(/\n/g, eol).length
+          );
+        }
+        const model = new LineInputModel(eol.length);
+        model.editNow([new ModelEdit('insertString', [0, text])], {});
+        model.flushChanges();
+        const original = model.lines.map((line) => ({ ...line }));
+        const plans = newlineInsertions(model, [...offsets].reverse(), config);
+        assert.ok(plans);
+        let result = text;
+        for (const insertion of [...plans].reverse()) {
+          result =
+            result.slice(0, insertion.start) +
+            insertion.text +
+            (insertion.closingText ?? '') +
+            result.slice(insertion.end);
+        }
+        assert.strictEqual(result, expected.replace(/\n/g, eol));
+        assert.deepStrictEqual(
+          model.lines.map((line) => ({ ...line })),
+          original
+        );
+        assert.strictEqual(model.getText(0, text.length), text);
+      });
+    }
+  }
+
+  it('rejects overlapping batch edits and token splits without modifying the mirror', () => {
+    const model = new StringDocument('[   ] symbol').model;
+    model.flushChanges();
+    assert.strictEqual(newlineInsertions(model, [1, 2], config), undefined);
+    assert.strictEqual(newlineInsertions(model, [1, 8], config), undefined);
+    assert.strictEqual(model.getText(0, 12), '[   ] symbol');
+  });
+
   it('indents after a multiline map value as a sibling of that map', () => {
     const { insertion } = plan(
       '{\n "502.82" {:code "502.82",\n           :children []},|\n "331.128" {}}'

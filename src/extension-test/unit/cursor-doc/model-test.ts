@@ -4,6 +4,27 @@ import * as model from '../../../cursor-doc/model';
 model.initScanner(20000);
 
 describe('LineInputModel line offsets', () => {
+  it('forks cached tokens without sharing mutable line state or offsets', () => {
+    const text = '[a\nb]\n(c)';
+    const original = new model.StringDocument(text).model;
+    original.flushChanges();
+    const lastOffset = original.getOffsetForLine(2);
+    const lines = original.lines.map((line) => ({ ...line }));
+    const copy = original.fork();
+    assert.strictEqual(copy.lines[1].tokens, original.lines[1].tokens);
+    copy.insertString(1, '"\n');
+    copy.flushChanges();
+    assert.strictEqual(original.getText(0, text.length), text);
+    assert.strictEqual(original.getOffsetForLine(2), lastOffset);
+    assert.deepStrictEqual(
+      original.lines.map((line) => ({ ...line })),
+      lines
+    );
+    const fresh = new model.StringDocument(copy.lines.map((line) => line.text).join('\n')).model;
+    fresh.flushChanges();
+    assert.deepStrictEqual(copy.lines, fresh.lines);
+  });
+
   for (const eol of ['\n', '\r\n']) {
     it(`keeps offsets correct after edits with ${JSON.stringify(eol)} line endings`, () => {
       const doc = new model.StringDocument(['abc', '', '😀last'].join(eol));

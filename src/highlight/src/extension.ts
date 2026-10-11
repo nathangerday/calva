@@ -18,8 +18,7 @@ function is_clojure(editor) {
 // Exported for integration testing purposes
 export let activeEditor: vscode.TextEditor;
 
-let lastHighlightedEditor,
-  rainbowColors,
+let rainbowColors,
   rainbowTypes: vscode.TextEditorDecorationType[],
   rainbowGuidesTypes: vscode.TextEditorDecorationType[],
   activeGuidesTypes: vscode.TextEditorDecorationType[],
@@ -37,10 +36,13 @@ let lastHighlightedEditor,
   enableBracketColors,
   useRainbowIndentGuides,
   highlightActiveIndent,
-  placedGuidesColor: Map<string, number> = new Map(),
   rainbowTimer = undefined,
   matchTimer = undefined,
   dirty = false;
+
+const pendingEditors = new Set<vscode.TextEditor>();
+let highlightedEditors = new WeakSet<vscode.TextEditor>();
+let placedGuidesColors = new WeakMap<vscode.TextEditor, Map<string, number>>();
 
 reloadConfig();
 
@@ -99,22 +101,22 @@ function activeGuidesDecorationType(color): vscode.TextEditorDecorationType {
 
 function reset_styles() {
   if (rainbowTypes) {
-    rainbowTypes.forEach((type) => activeEditor.setDecorations(type, []));
+    rainbowTypes.forEach((type) => type.dispose());
   }
   rainbowTypes = rainbowColors.map(colorDecorationType);
 
   if (rainbowGuidesTypes) {
-    rainbowGuidesTypes.forEach((type) => activeEditor.setDecorations(type, []));
+    rainbowGuidesTypes.forEach((type) => type.dispose());
   }
   rainbowGuidesTypes = rainbowColors.map(guidesDecorationType);
 
   if (activeGuidesTypes) {
-    activeGuidesTypes.forEach((type) => activeEditor.setDecorations(type, []));
+    activeGuidesTypes.forEach((type) => type.dispose());
   }
   activeGuidesTypes = rainbowColors.map(activeGuidesDecorationType);
 
   if (misplacedType) {
-    activeEditor.setDecorations(misplacedType, []);
+    misplacedType.dispose();
   }
   misplacedType = decorationType(
     misplacedBracketStyle || {
@@ -126,7 +128,7 @@ function reset_styles() {
   );
 
   if (matchedType) {
-    activeEditor.setDecorations(matchedType, []);
+    matchedType.dispose();
   }
   matchedType = decorationType(
     matchedBracketStyle || {
@@ -136,22 +138,24 @@ function reset_styles() {
   );
 
   if (commentFormType) {
-    activeEditor.setDecorations(commentFormType, []);
+    commentFormType.dispose();
   }
   commentFormType = decorationType(commentFormStyle || { fontStyle: 'italic' });
 
   if (ignoredFormType) {
-    activeEditor.setDecorations(ignoredFormType, []);
+    ignoredFormType.dispose();
   }
   ignoredFormType = decorationType(ignoredFormStyle || { textDecoration: 'none; opacity: 0.5' });
 
   if (ignoredTopLevelFormType) {
-    activeEditor.setDecorations(ignoredTopLevelFormType, []);
+    ignoredTopLevelFormType.dispose();
   }
   ignoredTopLevelFormType = decorationType(
     ignoredTopLevelFormStyle || ignoredFormStyle || { textDecoration: 'none; opacity: 0.5' }
   );
 
+  highlightedEditors = new WeakSet();
+  placedGuidesColors = new WeakMap();
   dirty = false;
 }
 
@@ -212,28 +216,41 @@ function reloadConfig() {
   }
 
   if (dirty) {
-    scheduleRainbowBrackets();
+    vscode.window.visibleTextEditors.forEach(scheduleRainbowBrackets);
   }
 }
 
-function scheduleRainbowBrackets() {
-  if (rainbowTimer) {
-    clearTimeout(rainbowTimer);
-  }
-  if (is_clojure(activeEditor)) {
-    rainbowTimer = setTimeout(updateRainbowBrackets, 16);
-  }
-}
-
-function updateRainbowBrackets() {
-  if (!is_clojure(activeEditor)) {
+function scheduleRainbowBrackets(editor: vscode.TextEditor = activeEditor) {
+  if (!is_clojure(editor)) {
     return;
   }
-  lastHighlightedEditor = activeEditor;
-  if (dirty) {
-    reset_styles();
+  pendingEditors.add(editor);
+  // Coalesce viewports without letting one split cancel another split's repaint.
+  if (!rainbowTimer) {
+    rainbowTimer = setTimeout(() => {
+      rainbowTimer = undefined;
+      if (dirty) {
+        reset_styles();
+        vscode.window.visibleTextEditors
+          .filter(is_clojure)
+          .forEach((view) => pendingEditors.add(view));
+      }
+      const editors = [...pendingEditors];
+      pendingEditors.clear();
+      editors.forEach(updateRainbowBrackets);
+    }, 16);
   }
-  const doc = activeEditor.document;
+}
+
+function updateRainbowBrackets(editor: vscode.TextEditor) {
+  if (
+    !is_clojure(editor) ||
+    editor.document.isClosed ||
+    !vscode.window.visibleTextEditors.includes(editor)
+  ) {
+    return;
+  }
+  const doc = editor.document;
   const mirrorDoc = docMirror.tryToGetDocument(doc);
   const index = mirrorDoc && getStructuralIndex(mirrorDoc.model.lineInputModel);
   if (!index) {
@@ -244,7 +261,7 @@ function updateRainbowBrackets() {
   const len = rainbowTypes.length;
   const colorIndex = cycleBracketColors ? (i) => i % len : (i) => Math.min(i, len - 1);
   const { customCommentForms, aliasMap } = config.getConfig();
-  const visible = activeEditor.visibleRanges.map((range): [number, number] => [
+  const visible = editor.visibleRanges.map((range): [number, number] => [
     doc.offsetAt(new vscode.Position(range.start.line, 0)),
     doc.offsetAt(doc.lineAt(Math.min(range.end.line, doc.lineCount - 1)).range.end),
   ]);
@@ -254,7 +271,8 @@ function updateRainbowBrackets() {
   const decoration = ([start, end]: [number, number]) => ({
     range: new vscode.Range(doc.positionAt(start), doc.positionAt(end)),
   });
-  placedGuidesColor = new Map();
+  const placedGuidesColor = new Map<string, number>();
+  placedGuidesColors.set(editor, placedGuidesColor);
   if (enableBracketColors && len) {
     for (const bracket of data.brackets) {
       rainbow[colorIndex(bracket.depth)].push(decoration(bracket.range));
@@ -265,25 +283,27 @@ function updateRainbowBrackets() {
       const start = doc.positionAt(opening.end - 1);
       const end = doc.positionAt(opening.pair.end);
       const color = colorIndex(opening.depth);
-      if (decorateGuide(doc, start, end, rainbowGuides[color])) {
+      if (decorateGuide(editor, start, end, rainbowGuides[color])) {
         placedGuidesColor.set(position_str(start), color);
       }
     }
   }
   for (let i = 0; i < rainbowTypes.length; i++) {
-    activeEditor.setDecorations(rainbowTypes[i], rainbow[i]);
-    activeEditor.setDecorations(
-      rainbowGuidesTypes[i],
-      useRainbowIndentGuides ? rainbowGuides[i] : []
-    );
+    editor.setDecorations(rainbowTypes[i], rainbow[i]);
+    editor.setDecorations(rainbowGuidesTypes[i], useRainbowIndentGuides ? rainbowGuides[i] : []);
   }
-  activeEditor.setDecorations(misplacedType, data.misplaced.map(decoration));
-  activeEditor.setDecorations(commentFormType, data.comments.map(decoration));
-  activeEditor.setDecorations(ignoredFormType, data.ignored.map(decoration));
-  activeEditor.setDecorations(ignoredTopLevelFormType, data.topLevelIgnored.map(decoration));
-  matchPairs();
-  if (highlightActiveIndent && len) {
-    decorateActiveGuides();
+  editor.setDecorations(misplacedType, data.misplaced.map(decoration));
+  editor.setDecorations(commentFormType, data.comments.map(decoration));
+  editor.setDecorations(ignoredFormType, data.ignored.map(decoration));
+  editor.setDecorations(ignoredTopLevelFormType, data.topLevelIgnored.map(decoration));
+  highlightedEditors.add(editor);
+  if (editor === activeEditor) {
+    matchPairs();
+    if (highlightActiveIndent && len) {
+      decorateActiveGuides();
+    }
+  } else {
+    clearInteractiveDecorations(editor);
   }
 }
 
@@ -322,7 +342,11 @@ function matchAfter(selection) {
 }
 
 function matchPairs() {
-  if (!is_clojure(activeEditor)) {
+  if (
+    !is_clojure(activeEditor) ||
+    !matchedType ||
+    !vscode.window.visibleTextEditors.includes(activeEditor)
+  ) {
     return;
   }
 
@@ -343,14 +367,15 @@ function matchPairs() {
 }
 
 function decorateGuide(
-  doc: vscode.TextDocument,
+  editor: vscode.TextEditor,
   startPos: vscode.Position,
   endPos: vscode.Position,
   guides: any[]
 ): number {
+  const doc = editor.document;
   let guideLength = 0;
   const seen = new Set<number>();
-  for (const visible of activeEditor.visibleRanges) {
+  for (const visible of editor.visibleRanges) {
     const first = Math.max(startPos.line + 1, visible.start.line);
     const last = Math.min(endPos.line, visible.end.line);
     for (let line = first; line <= last; line++) {
@@ -369,8 +394,15 @@ function decorateGuide(
 }
 
 function decorateActiveGuides() {
-  activeEditor = utilities.tryToGetActiveTextEditor();
-  if (!activeEditor) {
+  if (
+    !is_clojure(activeEditor) ||
+    !activeGuidesTypes ||
+    !vscode.window.visibleTextEditors.includes(activeEditor)
+  ) {
+    return;
+  }
+  const placedGuidesColor = placedGuidesColors.get(activeEditor);
+  if (!placedGuidesColor) {
     return;
   }
   const doc = activeEditor.document;
@@ -392,7 +424,7 @@ function decorateActiveGuides() {
         if (new vscode.Range(start, end).contains(selection) && hasIndentGuide(index, opening)) {
           if (color !== undefined && !seen.has(opening.offset)) {
             seen.add(opening.offset);
-            decorateGuide(doc, start, end, active[color]);
+            decorateGuide(activeEditor, start, end, active[color]);
           }
           break;
         }
@@ -403,15 +435,25 @@ function decorateActiveGuides() {
   activeGuidesTypes.forEach((type, i) => activeEditor.setDecorations(type, active[i]));
 }
 
+function clearInteractiveDecorations(editor: vscode.TextEditor) {
+  if (!editor || editor.document.isClosed || !vscode.window.visibleTextEditors.includes(editor)) {
+    return;
+  }
+  if (matchedType) {
+    editor.setDecorations(matchedType, []);
+  }
+  activeGuidesTypes?.forEach((type) => editor.setDecorations(type, []));
+}
+
 export function activate(context: vscode.ExtensionContext) {
   activeEditor = utilities.tryToGetActiveTextEditor();
+  vscode.window.visibleTextEditors.forEach(scheduleRainbowBrackets);
 
   vscode.window.onDidChangeActiveTextEditor(
     (editor) => {
+      clearInteractiveDecorations(activeEditor);
       activeEditor = editor;
-      if (editor && is_clojure(editor)) {
-        scheduleRainbowBrackets();
-      }
+      scheduleRainbowBrackets(editor);
     },
     null,
     context.subscriptions
@@ -419,21 +461,22 @@ export function activate(context: vscode.ExtensionContext) {
 
   vscode.window.onDidChangeTextEditorSelection(
     (event) => {
-      const activeEditor = utilities.tryToGetActiveTextEditor();
-      if (activeEditor && event.textEditor === activeEditor && is_clojure(event.textEditor)) {
-        if (lastHighlightedEditor !== event.textEditor) {
-          scheduleRainbowBrackets();
+      if (event.textEditor === activeEditor && is_clojure(activeEditor)) {
+        if (!highlightedEditors.has(event.textEditor)) {
+          scheduleRainbowBrackets(event.textEditor);
         } else {
           if (matchTimer) {
             clearTimeout(matchTimer);
           }
+          const editor = event.textEditor;
           matchTimer = setTimeout(() => {
+            matchTimer = undefined;
+            if (editor !== activeEditor) {
+              return;
+            }
             matchPairs();
             if (highlightActiveIndent && rainbowTypes.length) {
-              const activeEditor = utilities.tryToGetActiveTextEditor();
-              if (activeEditor) {
-                decorateActiveGuides();
-              }
+              decorateActiveGuides();
             }
           }, 16);
         }
@@ -445,35 +488,49 @@ export function activate(context: vscode.ExtensionContext) {
 
   vscode.workspace.onDidChangeTextDocument(
     (event) => {
-      if (is_clojure(activeEditor) && event.document === activeEditor.document) {
-        scheduleRainbowBrackets();
-      }
+      vscode.window.visibleTextEditors
+        .filter((editor) => editor.document === event.document)
+        .forEach(scheduleRainbowBrackets);
     },
     null,
     context.subscriptions
   );
 
   vscode.window.onDidChangeTextEditorVisibleRanges(
-    (event) => {
-      if (is_clojure(activeEditor) && event.textEditor === activeEditor) {
-        scheduleRainbowBrackets();
-      }
-    },
+    (event) => scheduleRainbowBrackets(event.textEditor),
+    null,
+    context.subscriptions
+  );
+
+  vscode.window.onDidChangeVisibleTextEditors(
+    (editors) => editors.forEach(scheduleRainbowBrackets),
     null,
     context.subscriptions
   );
 
   vscode.workspace.onDidChangeConfiguration(
-    (event) => {
+    () => {
       reloadConfig();
-      scheduleRainbowBrackets();
+      vscode.window.visibleTextEditors.forEach(scheduleRainbowBrackets);
     },
     null,
     context.subscriptions
   );
+
+  context.subscriptions.push(
+    new vscode.Disposable(() => {
+      clearTimeout(rainbowTimer);
+      clearTimeout(matchTimer);
+      rainbowTimer = matchTimer = undefined;
+      pendingEditors.clear();
+    })
+  );
 }
 
-export function highlight(editor) {
+export function highlight(editor: vscode.TextEditor) {
+  if (activeEditor !== editor) {
+    clearInteractiveDecorations(activeEditor);
+  }
   activeEditor = editor;
-  scheduleRainbowBrackets();
+  scheduleRainbowBrackets(editor);
 }

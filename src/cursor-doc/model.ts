@@ -373,6 +373,22 @@ export class LineInputModel implements EditableModel {
     return this.lineEndingLength === 1 ? '\n' : '\r\n';
   }
 
+  /** Independent text/lexical state for planning edits without re-lexing the
+   * document. Token arrays are read-only; re-lexing replaces them on each line.
+   */
+  fork(): LineInputModel {
+    const result = new LineInputModel(this.lineEndingLength);
+    result.lines = this.lines.map((line) =>
+      Object.assign(Object.create(TextLine.prototype) as TextLine, line, {
+        startState: { ...line.startState },
+        endState: { ...line.endState },
+      })
+    );
+    result.lineOffsets = [...this.lineOffsets];
+    result.dirtyLines = [...this.dirtyLines];
+    return result;
+  }
+
   /** The input lines. */
   lines: TextLine[] = [new TextLine('', this.getStateForLine(0))];
 

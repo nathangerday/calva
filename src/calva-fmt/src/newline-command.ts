@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as docMirror from '../../doc-mirror';
 import * as config from '../../formatter-config';
 import * as outputWindow from '../../repl-window/repl-window-doc';
-import { newlineInsertion } from './newline';
+import { newlineInsertions } from './newline';
 
 let pendingNewline: Promise<unknown> = Promise.resolve();
 
@@ -52,30 +52,26 @@ async function insertNewline(editor: vscode.TextEditor, retry: boolean): Promise
   const formatterConfig = config.getConfigNow(document);
   const autoIndent = vscode.workspace.getConfiguration('editor', document).get('autoIndent');
   const expandEmptyPairs = ['brackets', 'advanced', 'full'].includes(autoIndent as string);
-  const insertions = editor.selections.map((selection) => {
-    const start = document.offsetAt(selection.active);
-    const insertion = newlineInsertion(
-      mirror.model.lineInputModel,
-      start,
-      formatterConfig,
-      expandEmptyPairs
-    );
-    return insertion ? { start, ...insertion } : undefined;
-  });
-  if (insertions.some((insertion) => !insertion)) {
+  // Avoid building a large simulated batch that must fall back regardless.
+  if (editor.selections.length >= 1000) {
     return nativeNewline();
   }
-  const ordered = [...insertions].sort((a, b) => a.start - b.start);
+  const insertions = newlineInsertions(
+    mirror.model.lineInputModel,
+    editor.selections.map((selection) => document.offsetAt(selection.active)),
+    formatterConfig,
+    expandEmptyPairs
+  );
+  if (!insertions) {
+    return nativeNewline();
+  }
   // VS Code merges batches of 1000+ operations into one replacement, losing
   // the separate marker movement that places each caret on the inner line.
   const operationCount = insertions.reduce(
     (count, insertion) => count + 1 + Number(insertion.end > insertion.start),
     0
   );
-  if (
-    operationCount >= 1000 ||
-    ordered.some((insertion, i) => i > 0 && ordered[i - 1].end >= insertion.start)
-  ) {
+  if (operationCount >= 1000) {
     return nativeNewline();
   }
   const applied = await editor.edit((edit) => {

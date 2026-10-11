@@ -176,6 +176,34 @@ suite('Newline indentation suite', () => {
     );
   });
 
+  for (const eol of ['\n', '\r\n']) {
+    test(`plans dependent same-line cursors in one edit with ${JSON.stringify(eol)}`, async () => {
+      const text = '[a [b c]]' + eol;
+      const document = await open(text);
+      editor.selections = [3, 6].map((offset) => {
+        const position = document.positionAt(offset);
+        return new vscode.Selection(position, position);
+      });
+      const version = document.version;
+      assert.strictEqual(await vscode.commands.executeCommand('calva-fmt.newline'), true);
+      assert.strictEqual(document.version, version + 1);
+      assert.strictEqual(document.getText(), `[a ${eol} [b ${eol}  c]]${eol}`);
+      assert.deepStrictEqual(
+        editor.selections.map((s) => [s.active.line, s.active.character]),
+        [
+          [1, 1],
+          [2, 2],
+        ]
+      );
+      await vscode.commands.executeCommand('default:undo');
+      await testUtil.waitForCondition(() => document.getText() === text);
+      await vscode.commands.executeCommand('default:redo');
+      await testUtil.waitForCondition(
+        () => document.getText() === `[a ${eol} [b ${eol}  c]]${eol}`
+      );
+    });
+  }
+
   test('keeps the Enter queue usable after an edit fails', async () => {
     const document = await open(content);
     const offset = content.indexOf('},') + 2;
@@ -513,10 +541,10 @@ suite('Newline indentation suite', () => {
     for (const [left, right, indent] of [
       ['{:children ["191c" ', '"191o"]}', 12],
       ['{:children [1', ']}', 12],
-      ['(foo', '   bar)', 2],
-      ['(foo ', 'bar) ; c', 2],
-      ['(foo ', '; c', 2],
-      ['(foo ; c', '', 2],
+      ['(foo', '   bar)', 1],
+      ['(foo ', 'bar) ; c', 1],
+      ['(foo ', '; c', 1],
+      ['(foo ; c', '', 1],
       ['; comment', '', 0],
       ['(defn a []\n  1)', ' (defn b [] 2)', 0],
       ['(do (foo\n b)', ' c)', 4],

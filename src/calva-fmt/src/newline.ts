@@ -1,7 +1,57 @@
-import type { LineInputModel } from '../../cursor-doc/model';
+import { LineInputModel, ModelEdit } from '../../cursor-doc/model';
 import { getIndent } from '../../cursor-doc/indent';
 import type { FormatterConfig } from '../../formatter-config';
 import { validPair } from '../../cursor-doc/clojure-lexer';
+
+export interface NewlineInsertion {
+  start: number;
+  end: number;
+  text: string;
+  closingText?: string;
+}
+
+/** Plan in document order, letting each split update the context for the next
+ * one. Return edits in original coordinates, for a single VS Code transaction.
+ * A fork shares existing tokens rather than tokenizing a large document again.
+ */
+export function newlineInsertions(
+  model: LineInputModel,
+  offsets: number[],
+  config: FormatterConfig,
+  expandEmptyPairs = true
+): NewlineInsertion[] | undefined {
+  if (model.dirtyLines.length) {
+    return undefined;
+  }
+  let simulation = model;
+  const ordered = [...offsets].sort((a, b) => a - b);
+  const result: NewlineInsertion[] = [];
+  let delta = 0;
+  for (const [i, start] of ordered.entries()) {
+    const previous = result[result.length - 1];
+    if (previous && previous.end >= start) {
+      return undefined;
+    }
+    const offset = start + delta;
+    const insertion = newlineInsertion(simulation, offset, config, expandEmptyPairs);
+    if (!insertion) {
+      return undefined;
+    }
+    result.push({ start, ...insertion, end: insertion.end - delta });
+    if (i < ordered.length - 1) {
+      // Reuse the original cached index for the first cursor. Only fork once
+      // its valid edit must become context for another cursor.
+      if (simulation === model) {
+        simulation = model.fork();
+      }
+      const text = insertion.text + (insertion.closingText ?? '');
+      simulation.editNow([new ModelEdit('changeRange', [offset, insertion.end, text])], {});
+      simulation.flushChanges();
+      delta += text.length - (insertion.end - offset);
+    }
+  }
+  return result;
+}
 
 /** Plan a newline at a code token boundary using the existing indent engine.
  * The prefix is unchanged by inserting a newline, so its indent can be computed

@@ -401,29 +401,43 @@ async function reformatRanges(editor: vscode.TextEditor, ranges: OffsetRange[]) 
     );
     const version = editor.document.version;
     const edits = await format.formatRangeEdits(editor.document, range);
-    if (!edits || editor.document.isClosed || editor.document.version !== version) {
+    if (
+      !edits ||
+      editor.document.isClosed ||
+      editor.document.version !== version ||
+      !vscode.window.visibleTextEditors.includes(editor)
+    ) {
       return;
     }
     const isLast = i === ranges.length - 1;
 
-    if (!edits || edits.length === 0) {
-      if (isLast) {
-        await editor.edit(() => undefined, { undoStopBefore: false, undoStopAfter: true });
-      }
+    if (!edits.length && !isLast) {
       continue;
     }
 
-    await editor.edit(
-      (editBuilder) => {
-        for (const edit of edits) {
-          editBuilder.replace(edit.range, edit.newText);
+    try {
+      const applied = await editor.edit(
+        (editBuilder) => {
+          for (const edit of edits) {
+            editBuilder.replace(edit.range, edit.newText);
+          }
+        },
+        {
+          undoStopBefore: false,
+          undoStopAfter: isLast,
         }
-      },
-      {
-        undoStopBefore: false,
-        undoStopAfter: isLast,
+      );
+      if (!applied) {
+        return;
       }
-    );
+    } catch (error) {
+      // The editor can disappear after the visibility check but before VS Code
+      // accepts the edit, including an empty edit that finalizes the undo group.
+      if (editor.document.isClosed || !vscode.window.visibleTextEditors.includes(editor)) {
+        return;
+      }
+      throw error;
+    }
   }
 }
 

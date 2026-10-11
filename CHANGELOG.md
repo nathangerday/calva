@@ -4,6 +4,8 @@ Changes to Calva.
 
 ## [Unreleased]
 
+- Fix: Paredit and structural editing failing to initialize in files with very many lines, or after a large multiline paste.
+
 ## [2.0.605] - 2026-10-27
 
 - Fix: [Exceptions abbreviated in REPL output view with `cider-nrepl` >= 0.61](https://github.com/BetterThanTomorrow/calva/issues/3265)

@@ -2819,6 +2819,11 @@
         "when": "calva:keybindingsEnabled && editorLangId == clojure && editorTextFocus"
       },
       {
+        "command": "calva-fmt.newline",
+        "key": "enter",
+        "when": "calva:keybindingsEnabled && calva-fmt:structuralNewlineEnabled && editorLangId == clojure && editorTextFocus && !editorReadonly && !isInEmbeddedEditor && !calva:outputWindowActive && !suggestWidgetVisible && !renameInputVisible && (!vim.active || vim.mode == 'Insert') && (!neovim.init || neovim.mode == 'insert')"
+      },
+      {
         "command": "calva.evaluateReplWindowForm",
         "key": "enter",
         "when": "calva:keybindingsEnabled && calva:outputWindowActive && calva:replWindowSubmitOnEnter && editorTextFocus && !suggestWidgetVisible"

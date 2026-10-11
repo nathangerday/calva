@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import * as formatter from '../../../calva-fmt/src/format';
 import { formatIndexes } from '../../../calva-fmt/src/format-index';
 import { formatterWorker } from '../../../calva-fmt/src/worker-client';
+import { runFormatJob, FormatResult } from '../../../calva-fmt/src/format-job';
 import { sleep, waitForCondition } from './util';
 
 suite('Large formatter worker suite', () => {
@@ -190,6 +191,53 @@ suite('Large formatter worker suite', () => {
         assert.strictEqual(doc.getText(), beforeSwitch);
       } finally {
         formatterWorker.request = request;
+        await vscode.window.showTextDocument(doc);
+      }
+    });
+  }
+
+  for (const hasChanges of [true, false]) {
+    test(`switching tabs during comment formatting discards ${
+      hasChanges ? 'edits' : 'an empty undo edit'
+    }`, async () => {
+      const raw = `(do\n${' (println 1)\n'.repeat(1800)})`;
+      const text = hasChanges ? raw : formatter.formatCode(raw, vscode.EndOfLine.LF);
+      const doc = await vscode.workspace.openTextDocument({ language: 'clojure', content: text });
+      const editor = await vscode.window.showTextDocument(doc, { preview: false });
+      editor.selections = [1, 4].map((line) => new vscode.Selection(line, 2, line, 2));
+      const originalRequest = formatterWorker.request;
+      let job: Parameters<typeof formatterWorker.request>[1];
+      let finish: (result: FormatResult | undefined) => void;
+      formatterWorker.request = (_key, requestedJob) => {
+        job = requestedJob;
+        return {
+          promise: new Promise<FormatResult | undefined>((resolve) => (finish = resolve)),
+          cancel: () => finish(undefined),
+        };
+      };
+      const pending = vscode.commands.executeCommand('calva.toggleLineComment');
+      // Attach rejection handling before moving the captured editor away.
+      const completed = pending.then(
+        () => ({ error: undefined }),
+        (error: unknown) => ({ error })
+      );
+      try {
+        await waitForCondition(() => !!job);
+        const edited = doc.getText();
+        const result = runFormatJob(job);
+        assert.strictEqual(result.changes.length > 0, hasChanges);
+        const other = await vscode.workspace.openTextDocument({ content: 'another tab' });
+        await vscode.window.showTextDocument(other, { preview: false });
+        await waitForCondition(() => !vscode.window.visibleTextEditors.includes(editor));
+        assert.strictEqual(doc.isClosed, false);
+        finish(result);
+        assert.strictEqual((await completed).error, undefined);
+        assert.strictEqual(doc.getText(), edited);
+        await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor');
+      } finally {
+        finish?.(undefined);
+        await completed;
+        formatterWorker.request = originalRequest;
         await vscode.window.showTextDocument(doc);
       }
     });

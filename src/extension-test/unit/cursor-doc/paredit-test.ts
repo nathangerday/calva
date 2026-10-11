@@ -3441,6 +3441,67 @@ describe('paredit', () => {
           .toEqual(textNotation.textAndSelection(b));
       });
 
+      describe('Removing blank lines without adding a separator', () => {
+        for (const [before, after] of [
+          ['(let [x (f)•        |•        y 2] y)', '(let [x (f)|•        y 2] y)'],
+          ['(let [x (f) \t•        |•        y 2] y)', '(let [x (f) \t|•        y 2] y)'],
+          ['(let [x (f)•    |   •        y 2] y)', '(let [x (f)|•        y 2] y)'],
+          ['[x ; comment• |• y]', '[x ; comment|• y]'],
+          // Code following the cursor still needs a separator when joined.
+          ['[foo• |bar]', '[foo |bar]'],
+          ['[foo• | bar]', '[foo |bar]'],
+          ['[foo•| bar]', '[foo |bar]'],
+          ['[foo  • |bar]', '[foo |bar]'],
+        ]) {
+          it(before, () => {
+            const a = textNotation.docFromTextNotation(before);
+            const b = textNotation.docFromTextNotation(after);
+            paredit.backspace(a);
+            expectLib
+              .expect(textNotation.textAndSelection(a))
+              .toEqual(textNotation.textAndSelection(b));
+          });
+        }
+      });
+
+      describe('Joining lines with comma separators', () => {
+        for (const [name, before, after] of [
+          [
+            'preserves the comma after a nested map when removing a blank line',
+            '{• "502.82" {:code "502.82", :children []},• |• "331.128" {}}',
+            '{• "502.82" {:code "502.82", :children []},|• "331.128" {}}',
+          ],
+          ['joins forms without adding a space after a comma', '[:a,• |:b]', '[:a,|:b]'],
+          [
+            'preserves existing spaces and tabs after comma separators',
+            '[:a , \t, \t• \t|:b]',
+            '[:a , \t, \t|:b]',
+          ],
+          ['preserves existing spaces after a comma', '[:a,  • |:b]', '[:a,  |:b]'],
+          ['preserves a comma before a closing delimiter', '[:a,• |]', '[:a,|]'],
+          [
+            'preserves existing spacing after a comma before a closing delimiter',
+            '[:a, \t• |]',
+            '[:a, \t|]',
+          ],
+          [
+            'preserves commas on an otherwise blank preceding line',
+            '[•• , \t, \t• |:b]',
+            '[•• , \t, \t|:b]',
+          ],
+          ['still deletes a comma directly to the left of the cursor', '[:a,| :b]', '[:a| :b]'],
+        ]) {
+          it(name, () => {
+            const a = textNotation.docFromTextNotation(before);
+            const b = textNotation.docFromTextNotation(after);
+            paredit.backspace(a);
+            expectLib
+              .expect(textNotation.textAndSelection(a))
+              .toEqual(textNotation.textAndSelection(b));
+          });
+        }
+      });
+
       it('Deletes whitespace to the left and avoids inserting a space if on a close token', () => {
         const a = textNotation.docFromTextNotation('(if :foo•    |)');
         const b = textNotation.docFromTextNotation('(if :foo|)');

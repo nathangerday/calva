@@ -7,6 +7,15 @@ import * as docmirror from '../../doc-mirror/index';
 import * as config from '../../formatter-config';
 import * as calvaConfig from '../../config';
 import { formatterWorker } from './worker-client';
+import { newlineCommand, newlineEnabled } from './newline-command';
+
+function updateNewlineContext() {
+  void vscode.commands.executeCommand(
+    'setContext',
+    'calva-fmt:structuralNewlineEnabled',
+    newlineEnabled(vscode.window.activeTextEditor?.document)
+  );
+}
 
 function isOldIndentEngineInPlay(): boolean {
   return (
@@ -44,6 +53,9 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(formatterWorker);
   docmirror.activate();
   vscode.languages.setLanguageConfiguration('clojure', getLanguageConfiguration());
+  context.subscriptions.push(vscode.commands.registerCommand('calva-fmt.newline', newlineCommand));
+  updateNewlineContext();
+  context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(updateNewlineContext));
   context.subscriptions.push(
     vscode.commands.registerCommand('calva-fmt.formatCurrentForm', () => {
       const editor = vscode.window.activeTextEditor;
@@ -94,6 +106,12 @@ export function activate(context: vscode.ExtensionContext) {
   );
   vscode.window.onDidChangeActiveTextEditor(inferer.updateState);
   vscode.workspace.onDidChangeConfiguration((e) => {
+    if (
+      e.affectsConfiguration('editor.formatOnType') ||
+      e.affectsConfiguration('calva.fmt.newIndentEngine')
+    ) {
+      updateNewlineContext();
+    }
     if (e.affectsConfiguration('editor.formatOnType')) {
       console.log('Issue #2071: editor.formatOnType changed, updating language configuration');
       vscode.languages.setLanguageConfiguration('clojure', getLanguageConfiguration());

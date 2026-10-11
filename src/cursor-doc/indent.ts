@@ -54,9 +54,11 @@ export function collectIndents(
   offset: number,
   config: formatterConfig.FormatterConfig,
   maxDepth: number = 3,
-  maxLines: number = 20
+  maxLines: number = 20,
+  splitAt?: number
 ): IndentInformation[] {
   const cursor = document.getTokenCursor(offset);
+  const splitLine = splitAt === undefined ? -1 : document.getTokenCursor(splitAt).line;
   cursor.backwardWhitespace();
   let argPos = 0;
   const startLine = cursor.line;
@@ -103,11 +105,13 @@ export function collectIndents(
         ['id', 'kw'].includes(cursor.getToken().type) &&
         nextCursor.line == cursor.line &&
         !nextCursor.atEnd() &&
+        (splitAt === undefined || nextCursor.offsetStart < splitAt) &&
         isList
           ? nextCursor.rowCol[1]
           : cursor.rowCol[1];
 
       const token = cursor.getToken().raw;
+      const tokenBeforeSplit = splitAt === undefined || cursor.offsetStart < splitAt;
       const startIndent = cursor.rowCol[1];
       if (!cursor.backwardUpList()) {
         break;
@@ -115,6 +119,9 @@ export function collectIndents(
 
       const pattern =
         isList &&
+        // An operator moved below the opening delimiter by Enter does not
+        // supply an indentation rule for the newly created first line.
+        tokenBeforeSplit &&
         _.find(
           combinedRules,
           (rule) =>
@@ -141,9 +148,20 @@ export function collectIndents(
     if (cursor.line != lastLine) {
       const head = cursor.clone();
       head.forwardSexp();
+      const sexpEndLine = head.line;
       head.forwardWhitespace();
       if (!head.atEnd()) {
-        lastIndent = head.rowCol[1];
+        // A planned split changes same-line alignment, not the fallback indent
+        // from an existing later line when the look-back limit is reached.
+        if (
+          splitAt === undefined ||
+          head.offsetStart < splitAt ||
+          head.line !== splitLine ||
+          sexpEndLine !== splitLine
+        ) {
+          lastIndent = head.rowCol[1];
+        }
+        // Crossing a line must still reset block-rule expression bookkeeping.
         exprsOnLine = 0;
         lastLine = cursor.line;
       }
@@ -220,7 +238,10 @@ const calculateIndent = (
   return currentIndent;
 };
 
-/** Returns the expected newline indent for the given position, in characters. */
+/** Returns the expected newline indent for the given position, in characters.
+ * splitAt excludes same-line alignment at/after a planned line break.
+ * Existing on-type callers continue to use the document's actual line breaks.
+ */
 export function getIndent(
   document: model.EditableModel,
   offset: number,
@@ -228,9 +249,10 @@ export function getIndent(
     'cljfmt-options': {
       indents: indentRules,
     },
-  }
+  },
+  splitAt?: number
 ): number {
-  const state = collectIndents(document, offset, config);
+  const state = collectIndents(document, offset, config, 3, 20, splitAt);
   if (!state.length) {
     return 0;
   }

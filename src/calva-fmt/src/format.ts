@@ -405,29 +405,39 @@ export async function formatPosition(
 
 // Debounce format-as-you-type and toss it aside if User seems still to be working
 // Increased from 250ms to 400ms to reduce cursor jumping issues
-let scheduledFormatCircumstances = undefined;
+let scheduledFormatCircumstances:
+  | {
+      editor: vscode.TextEditor;
+      documentVersion: number;
+      timeoutId: ReturnType<typeof setTimeout>;
+    }
+  | undefined;
 const scheduledFormatDelayMs = 400;
 
 function formatPositionCallback(extraConfig: CljFmtConfig) {
+  const circumstances = scheduledFormatCircumstances;
   if (
-    scheduledFormatCircumstances &&
-    vscode.window.activeTextEditor === scheduledFormatCircumstances['editor'] &&
-    vscode.window.activeTextEditor.document.version ==
-      scheduledFormatCircumstances['documentVersion']
+    circumstances &&
+    vscode.window.activeTextEditor === circumstances.editor &&
+    circumstances.editor.document.version === circumstances.documentVersion
   ) {
-    formatPosition(scheduledFormatCircumstances['editor'], true, extraConfig)
+    formatPosition(circumstances.editor, true, extraConfig)
       .catch((error) => console.error('Scheduled formatting failed', error))
       .finally(() => {
-        scheduledFormatCircumstances = undefined;
+        // A subsequent edit may have scheduled another job while this one
+        // awaited its worker or was canceled by that edit.
+        if (scheduledFormatCircumstances === circumstances) {
+          scheduledFormatCircumstances = undefined;
+        }
       });
   }
-  // do not anull scheduledFormatCircumstances. Another callback might have been scheduled
 }
 
 export function scheduleFormatAsType(editor: vscode.TextEditor, extraConfig: CljFmtConfig = {}) {
   const expectedDocumentVersionUponCallback = 1 + editor.document.version;
   if (
     !scheduledFormatCircumstances ||
+    editor !== scheduledFormatCircumstances.editor ||
     expectedDocumentVersionUponCallback != scheduledFormatCircumstances['documentVersion']
   ) {
     // Unschedule (if scheduled) & reschedule: best effort to reformat at a quiet time

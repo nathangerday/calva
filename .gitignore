@@ -82,6 +82,8 @@ report.*
 !.clj-kondo/config.edn
 !**/.lsp/config.edn
 /clojure-lsp*
+/bundled/clojure-lsp/clojure-lsp.jar
+/bundled/clojure-lsp/.download-*/
 
 #Calva
 output.calva-repl

@@ -648,13 +648,13 @@
               "latest",
               "nightly"
             ],
-            "markdownDescription": "The version of `clojure-lsp` to download and use. This should be a release tag-name, or `latest` (default), or `nightly`. Will take effect after a reload of the VS Code window. See [calva.io/clojure-lsp](https://calva.io/clojure-lsp) for information about how to manage the clojure-lsp process. NB: _This setting will be ignored if `calva.clojureLspPath` is set to something non-blank._",
+            "markdownDescription": "The version of `clojure-lsp` to download and use in builds without a bundled server. This should be a release tag-name, or `latest` (default), or `nightly`. Will take effect after a reload of the VS Code window. See [calva.io/clojure-lsp](https://calva.io/clojure-lsp) for information about how to manage the clojure-lsp process. NB: _This setting will be ignored when a server is bundled or `calva.clojureLspPath` is non-blank._",
             "pattern": "^(latest|nightly|\\d{4}\\.\\d{2}\\.\\d{2}-\\d{2}\\.\\d{2}\\.\\d{2})$"
           },
           "calva.clojureLspPath": {
             "type": "string",
             "default": "",
-            "markdownDescription": "The absolute path to the `clojure-lsp` native binary you want Calva to use. When non-blank the `calva.clojureLspVersion` setting will be ignored, and the binary at the path set will be used instead. Will take effect after a reload of the VS Code window. See [calva.io/clojure-lsp](https://calva.io/clojure-lsp) for information about how to manage the clojure-lsp process."
+            "markdownDescription": "The absolute path to the `clojure-lsp` native binary or JAR you want Calva to use. When non-blank this overrides the bundled server and `calva.clojureLspVersion`. JARs require Java where the extension runs, including inside WSL or SSH when using a remote workspace. Will take effect after a reload of the VS Code window. See [calva.io/clojure-lsp](https://calva.io/clojure-lsp) for information about how to manage the clojure-lsp process."
           },
           "calva.openBrowserWhenFigwheelStarted": {
             "type": "boolean",

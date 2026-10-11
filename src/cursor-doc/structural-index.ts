@@ -29,6 +29,7 @@ export class StructuralIndex {
   balanced = true;
   hasLineComments = false;
   hasMultilineStrings = false;
+  private readonly formatHazards: number[] = [];
   private simpleTopLevel = true;
 
   get navigationSafe() {
@@ -46,6 +47,7 @@ export class StructuralIndex {
         const tk = model.lines[line].tokens[token];
         if (tk.type === 'comment') {
           this.hasLineComments = true;
+          this.formatHazards.push(base + tk.offset);
         }
         if (['ws', 'eol', 'comment', 'prompt'].includes(tk.type)) {
           continue;
@@ -62,14 +64,17 @@ export class StructuralIndex {
         if (tk.type === 'reader') {
           readerStart ??= offset;
           this.simpleTopLevel = false;
+          this.formatHazards.push(offset);
           continue;
         }
         if (tk.type === 'ignore') {
           this.ignores.push({ offset, topLevel: stack.length === 0 });
           this.simpleTopLevel = false;
+          this.formatHazards.push(offset);
         }
         if (tk.raw.startsWith('^')) {
           this.simpleTopLevel = false;
+          this.formatHazards.push(offset);
         }
         if (tk.type === 'too-long-line' || tk.type === 'junk') {
           this.balanced = false;
@@ -102,6 +107,7 @@ export class StructuralIndex {
             parent.pair = bracket;
             if (isString && parent.line !== line) {
               this.hasMultilineStrings = true;
+              this.formatHazards.push(parent.offset);
             }
             if (!isString) {
               depth--;
@@ -118,6 +124,54 @@ export class StructuralIndex {
     if (stack.length) {
       this.balanced = false;
     }
+    this.formatHazards.sort((a, b) => a - b);
+  }
+
+  /** Keep full context inside a root containing readers, comments or multiline
+   * strings. Independent roots elsewhere in the file do not affect this one.
+   */
+  formattingSafe(opening: IndexedBracket): boolean {
+    let root = opening;
+    while (root.parent) {
+      root = root.parent;
+    }
+    if (!this.balanced || !root.pair || root.readerStart !== root.offset) {
+      return false;
+    }
+    let low = 0;
+    let high = this.formatHazards.length;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if (this.formatHazards[mid] < root.offset) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    if (low < this.formatHazards.length && this.formatHazards[low] < root.pair.end) {
+      return false;
+    }
+    // Reader/metadata tokens immediately preceding the root belong to its
+    // formatting context. A metadata map can precede the target as well.
+    const cursor = this.model.getTokenCursor(root.offset);
+    cursor.backwardWhitespace();
+    cursor.previous();
+    if (cursor.getToken().type === 'close') {
+      const previous = this.byOffset.get(cursor.offsetStart)?.pair;
+      if (previous?.raw.startsWith('^')) {
+        return false;
+      }
+      if (previous?.raw === '{') {
+        const before = this.model.getTokenCursor(previous.offset);
+        before.backwardWhitespace();
+        before.previous();
+        if (before.getToken().raw.startsWith('^')) {
+          return false;
+        }
+      }
+    }
+    const token = cursor.getToken();
+    return !['reader', 'ignore'].includes(token.type) && !token.raw.startsWith('^');
   }
 
   /** The list containing a token; an opening token belongs to its parent. */

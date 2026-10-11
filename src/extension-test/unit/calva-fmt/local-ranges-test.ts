@@ -20,10 +20,14 @@ const config = {
   'comment-form?': false,
 };
 
-function assertLocalOutput(text: string, changed: [number, number][], eol = '\n') {
+function assertLocalOutput(
+  text: string,
+  changed: [number, number][],
+  eol = '\n',
+  range: [number, number] = [0, text.length]
+) {
   const doc = new model.StringDocument(text);
   doc.model.flushChanges();
-  const range: [number, number] = [0, text.length];
   const indexes = changed.map(([, end]) => end);
   const windows = localFormatRanges(doc.model, [range], changed, config);
   const whole = formatIndex.formatIndexes(text, range, indexes, eol, true, config)['range-text'];
@@ -48,7 +52,7 @@ function assertLocalOutput(text: string, changed: [number, number][], eol = '\n'
   for (const change of changes) {
     result = result.slice(0, change.start) + change.text + result.slice(change.end);
   }
-  assert.strictEqual(result, whole);
+  assert.strictEqual(result, text.slice(0, range[0]) + whole + text.slice(range[1]));
   return windows;
 }
 
@@ -61,6 +65,50 @@ function largeMapWithMiddle(middle: string) {
 }
 
 describe('Local post-edit formatting', () => {
+  it('keeps local formatting when unrelated syntax is outside the independent collection', () => {
+    const root = largeMapWithMiddle(' :prev "x"\n :target [1 2 3 9]\n :next 4');
+    const end = root.indexOf('3 9]') + 3;
+    for (const eol of ['\n', '\r\n']) {
+      for (const suffix of [
+        '; unrelated comment',
+        '#_[:ignored]',
+        '#tag [:other]',
+        '^:m []',
+        '"one\ntwo"',
+      ]) {
+        const prefix = `; leading comment${eol}`;
+        const text = prefix + root.replace(/\n/g, eol) + eol + suffix.replace(/\n/g, eol);
+        const rootEnd = prefix.length + root.replace(/\n/g, eol).length;
+        const changedEnd = prefix.length + root.slice(0, end).replace(/\n/g, eol).length;
+        const windows = assertLocalOutput(text, [[changedEnd - 2, changedEnd]], eol, [
+          prefix.length,
+          rootEnd,
+        ]);
+        assert.ok(windows.reduce((size, [a, b]) => size + b - a, 0) < root.length / 10);
+      }
+    }
+  });
+
+  it('retains reader and metadata context attached to the collection', () => {
+    const root = largeMapWithMiddle(' :prev "x"\n :target [1 2 3 9]\n :next 4');
+    for (const prefix of [
+      '#_ ',
+      '#tag ',
+      '^:m ',
+      '^ {:doc "context"} ',
+      '^{:doc "context"} ',
+      '^"Type" ',
+    ]) {
+      const text = prefix + root;
+      const doc = new model.StringDocument(text);
+      doc.model.flushChanges();
+      const range: [number, number] = [prefix.length, text.length];
+      const end = text.indexOf('3 9]') + 3;
+      assert.deepStrictEqual(localFormatRanges(doc.model, [range], [[end - 2, end]], config), [
+        range,
+      ]);
+    }
+  });
   it('translates changed ranges across a multi-cursor batch', () => {
     const edits = [
       new model.ModelEdit('insertString', [10, 'xyz']),

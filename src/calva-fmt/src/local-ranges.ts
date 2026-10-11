@@ -58,7 +58,7 @@ function children(index: StructuralIndex, opening: IndexedBracket): Child[] {
   let result = cache.get(opening);
   if (!result) {
     result = [];
-    const cursor = index.model.getTokenCursor(opening.offset);
+    let cursor = index.model.getTokenCursor(opening.offset);
     cursor.next();
     while (!cursor.atEnd()) {
       cursor.forwardWhitespace();
@@ -67,7 +67,12 @@ function children(index: StructuralIndex, opening: IndexedBracket): Child[] {
       }
       const start = cursor.offsetStart;
       const firstLine = cursor.line;
-      if (!cursor.forwardSexp()) {
+      const pair = index.byOffset.get(start)?.pair;
+      if (pair) {
+        // This root has already passed scoped safety checks. Reader syntax in
+        // an independent root need not force a token walk through this child.
+        cursor = index.model.getTokenCursor(pair.end);
+      } else if (!cursor.forwardSexp()) {
         break;
       }
       result.push({ range: [start, cursor.offsetStart], firstLine, lastLine: cursor.line });
@@ -90,9 +95,7 @@ export function localFormatRanges(
   const index = getStructuralIndex(model);
   const options = config['cljfmt-options'] ?? {};
   if (
-    !index?.navigationSafe ||
-    index.hasLineComments ||
-    index.hasMultilineStrings ||
+    !index?.balanced ||
     options['indentation?'] === false ||
     [
       'align-associative?',
@@ -109,6 +112,7 @@ export function localFormatRanges(
       if (
         range[1] - range[0] < LARGE_FORMAT_RANGE ||
         !opening?.pair ||
+        !index.formattingSafe(opening) ||
         opening.pair.end !== range[1] ||
         !['{', '[', '#{'].includes(opening.raw)
       ) {

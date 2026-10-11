@@ -3,6 +3,66 @@ import * as model from '../../../cursor-doc/model';
 
 model.initScanner(20000);
 
+describe('LineInputModel large multiline changes', function () {
+  this.timeout(20000);
+
+  for (const eol of ['\n', '\r\n']) {
+    it(`loads and navigates 200,000 lines with ${JSON.stringify(eol)}`, () => {
+      const text = '[' + Array(200000).fill('item').join(eol) + ']';
+      const input = new model.StringDocument(text).model;
+      input.flushChanges();
+      assert.strictEqual(input.lines.length, 200000);
+      assert.strictEqual(input.getText(0, text.length), text);
+      for (const row of [0, 100000, 199999]) {
+        const offset = row === 0 ? 0 : 1 + row * (4 + eol.length);
+        assert.strictEqual(input.getOffsetForLine(row), offset);
+        assert.deepStrictEqual(input.getRowCol(offset), [row, 0]);
+      }
+      const cursor = input.getTokenCursor(0);
+      assert.ok(cursor.forwardSexp());
+      assert.strictEqual(cursor.offsetStart, text.length);
+      input.insertString(input.getOffsetForLine(100000), 'x');
+      input.flushChanges();
+      assert.strictEqual(input.getLineText(100000), 'xitem');
+    });
+
+    it(`replaces an interior range with 200,000 lines with ${JSON.stringify(eol)}`, () => {
+      const original = ['{:before 1', ' :items [old', ' value]', ' :after 2}'].join(eol);
+      const input = new model.StringDocument(original).model;
+      input.flushChanges();
+      // Build structural state before replacing the range, so stale pairing
+      // and positions are also detected after a large paste.
+      assert.ok(input.getTokenCursor(0).forwardSexp());
+      const start = original.indexOf('old');
+      const end = original.indexOf('value') + 'value'.length;
+      const inserted = Array(200000).fill('item').join(eol);
+      input.editNow([new model.ModelEdit('changeRange', [start, end, inserted])], {});
+      input.flushChanges();
+      const expected = original.slice(0, start) + inserted + original.slice(end);
+      assert.strictEqual(input.lines.length, 200002);
+      assert.strictEqual(input.getText(0, expected.length), expected);
+      assert.deepStrictEqual(input.getRowCol(start), [1, ' :items ['.length]);
+      assert.deepStrictEqual(input.getRowCol(start + inserted.length), [200000, 4]);
+      const cursor = input.getTokenCursor(0);
+      assert.ok(cursor.forwardSexp());
+      assert.strictEqual(cursor.offsetStart, expected.length);
+      input.editNow(
+        [
+          new model.ModelEdit('changeRange', [
+            start,
+            start + inserted.length,
+            original.slice(start, end),
+          ]),
+        ],
+        {}
+      );
+      input.flushChanges();
+      assert.strictEqual(input.getText(0, original.length), original);
+      assert.strictEqual(input.lines.length, 4);
+    });
+  }
+});
+
 describe('LineInputModel line offsets', () => {
   it('forks cached tokens without sharing mutable line state or offsets', () => {
     const text = '[a\nb]\n(c)';

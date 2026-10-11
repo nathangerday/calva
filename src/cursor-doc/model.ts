@@ -754,8 +754,13 @@ export class LineInputModel implements EditableModel {
       this.insertLines(endLine, replaceLines.length - currentLength);
     }
 
-    // now splice in our edited lines
-    this.lines.splice(startLine, endLine - startLine + 1, ...items);
+    // Keep ordinary edits in place, but do not pass a large document/paste as
+    // function arguments: V8 throws before splice can run at its argument limit.
+    if (items.length < 8192) {
+      this.lines.splice(startLine, currentLength, ...items);
+    } else {
+      this.lines = this.lines.slice(0, startLine).concat(items, this.lines.slice(endLine + 1));
+    }
     this.lineOffsets.length = Math.min(this.lineOffsets.length, startLine + 1);
     updateStructuralIndex(this, startLine, currentLength, items);
 

@@ -4,6 +4,8 @@ Changes to Calva.
 
 ## [Unreleased]
 
+- Fix: Paredit and structural editing failing to initialize in files with very many lines, or after a large multiline paste.
+
 ## [2.0.599] - 2026-09-23
 
 - Fix: [autoConnectRepl tried to connect even if no .nrepl-port present](https://github.com/BetterThanTomorrow/calva/issues/3278)

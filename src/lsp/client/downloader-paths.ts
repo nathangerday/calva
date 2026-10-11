@@ -4,6 +4,18 @@ import JSZip = require('jszip');
 
 const versionFileName = 'clojure-lsp-version';
 
+export async function getBundledClojureLspPath(extensionPath: string): Promise<string | undefined> {
+  const filename = path.join(extensionPath, 'bundled', 'clojure-lsp', 'clojure-lsp.jar');
+  try {
+    return (await fs.promises.stat(filename)).isFile() ? filename : undefined;
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 const artifacts = {
   darwin: {
     x64: 'clojure-lsp-native-macos-amd64.zip',

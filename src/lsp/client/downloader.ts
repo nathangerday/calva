@@ -6,6 +6,7 @@ import * as vscode from 'vscode';
 import * as fs from 'node:fs';
 import {
   getArtifactDownloadName,
+  getBundledClojureLspPath,
   getClojureLspPath,
   getVersionFilePath,
   readVersionFile,
@@ -211,6 +212,12 @@ export const ensureServerDownloaded = async (
 
 export async function checkForUpgrade(context: vscode.ExtensionContext): Promise<void> {
   try {
+    if (
+      config.getConfig().clojureLspPath !== '' ||
+      (await getBundledClojureLspPath(context.extensionPath))
+    ) {
+      return;
+    }
     const storageDir = getClojureLspStorageDir(context);
     if (!(await acquireDownloadLock(storageDir))) {
       return;
@@ -260,6 +267,16 @@ export async function ensureLSPServer(
       );
     }
     return userConfiguredClojureLspPath;
+  }
+  const bundledPath = await getBundledClojureLspPath(context.extensionPath);
+  if (bundledPath) {
+    console.log('Using bundled Clojure LSP:', bundledPath);
+    if (forceDownload) {
+      void vscode.window.showInformationMessage(
+        'This Calva build includes Clojure LSP. Update Calva to update its bundled server.'
+      );
+    }
+    return bundledPath;
   }
   return await ensureServerDownloaded(context, forceDownload);
 }

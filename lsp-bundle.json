@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/nathangerday/clojure-lsp",
-  "revision": "0ac56c52c2232a53e7bca8b5dd93f397294e9fec",
-  "release": "calva-performance-0ac56c5",
-  "artifactUrl": "https://github.com/nathangerday/clojure-lsp/releases/download/calva-performance-0ac56c5/clojure-lsp.jar",
-  "sha256": "faff0fd9ab911f7f7010265516e82faf65286ac4f1ec79b86cd721b4115d52f2"
+  "revision": "a0fc692a1dcaf328eeb0b91ed616af6bdc72ea34",
+  "release": "calva-performance-a0fc692",
+  "artifactUrl": "https://github.com/nathangerday/clojure-lsp/releases/download/calva-performance-a0fc692/clojure-lsp.jar",
+  "sha256": "44b73afac4a251e2f0aeec204423a12e84dc2a8abe62c52f15cac1c785589d49"
 }

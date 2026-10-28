@@ -10,12 +10,11 @@ import _ = require('lodash');
 import type * as tokenCursor from '../../cursor-doc/token-cursor';
 import { FormatJob, runFormatJob } from './format-job';
 import { formatterWorker } from './worker-client';
-import { getScannerMaxLength } from '../../cursor-doc/model';
+import { getScannerMaxLength, StringDocument } from '../../cursor-doc/model';
 import { LARGE_FORMAT_RANGE } from './local-ranges';
 import * as state from '../../state';
 import * as healer from './healer';
 import { alignRanges } from './align-ranges';
-import { StringDocument } from '../../cursor-doc/model';
 import { getStructuralIndex } from '../../cursor-doc/structural-index';
 
 /**

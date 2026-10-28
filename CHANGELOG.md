@@ -4,6 +4,8 @@ Changes to Calva.
 
 ## [Unreleased]
 
+- Bundle the latest performance LSP rebased on upstream, including the fix for CPU saturation during bulk file changes and session-safe analysis publication.
+
 - Fix: Paredit and structural editing failing to initialize in files with very many lines, or after a large multiline paste.
 
 ## [2.0.605] - 2026-10-27

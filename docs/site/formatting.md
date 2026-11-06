@@ -206,3 +206,10 @@ These features are marked as experimental in cljfmt and may change in future ver
 #### Format and Align Current Form
 
 For more surgical alignment control, use the **Format and Align Current Form** command to apply alignment on-demand to specific forms rather than enabling it globally.
+
+With no selection, this command formats the nearest enclosing collection (map,
+vector, list, or set), including its nested forms. A cursor inside a string uses
+the collection containing that string. With a selection, only the selected
+text is formatted and aligned recursively. Multiple selections/cursors are
+supported; overlapping scopes are formatted once. A cursor outside any
+collection leaves the document unchanged.

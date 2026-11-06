@@ -4,6 +4,12 @@ Changes to Calva.
 
 ## [Unreleased]
 
+## [2.0.609-performance] - 2026-11-06
+
+- Sync the performance build with upstream Calva 2.0.609, including the new REPL input and output view improvements.
+- Retain large-document editing, incremental structural indexing, visible-range highlighting, and cancellable worker formatting alongside the upstream changes.
+- Include the pinned performance LSP with the bulk-file-change CPU fix and session-safe analysis publication.
+
 ## [2.0.609] - 2026-11-02
 
 - [Autoconfigure custom keybindings that the output view should handle](https://github.com/BetterThanTomorrow/calva/issues/3331)

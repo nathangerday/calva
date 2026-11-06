@@ -10,9 +10,14 @@ import _ = require('lodash');
 import type * as tokenCursor from '../../cursor-doc/token-cursor';
 import type { EditableDocument } from '../../cursor-doc/model';
 import * as formatIndex from './format-index';
+import { FormatJob, runFormatJob, whitespaceAndNsEdits } from './format-job';
+import { formatterWorker } from './worker-client';
+import { getScannerMaxLength, StringDocument } from '../../cursor-doc/model';
+import { LARGE_FORMAT_RANGE } from './local-ranges';
 import * as state from '../../state';
 import * as healer from './healer';
-import * as nsForm from '../../util/ns-form';
+import { alignRanges } from './align-ranges';
+import { getStructuralIndex } from '../../cursor-doc/structural-index';
 
 /**
  * Calculates the indent edit needed for a position without performing it.
@@ -83,68 +88,102 @@ export async function indentPosition(position: vscode.Position, document: vscode
   }
 }
 
-/** Micro-edits to change previousText to formattedText.
- * The formatter usually changes only whitespace.
- * However, its :sort-ns-references? may change text too.
- * Computation of micro-edits is more efficient for whitespace-only changes.
- * Therefore, if a ns form is found,
- * we compute one set of edits for the ns form
- * (which is 1 large, degenerate edit if more than whitespace changed)
- * plus another set of edits for the rest of the document.
- * In the worst case, there are multiple ns forms
- * and the "rest-of-document" changes also degenerate
- * to a single large edit.
- * Micro-edits are preferable because they nudge all cursors
- * and they seem to avoid re-syntax-highlighting,
- * compared with replacing swaths of substantive text.
+/** Execute large jobs off the extension host and discard results when the
+ * originating document changes, closes, or its provider request is canceled.
  */
-function whitespaceAndNsEdits(
-  eol: string,
-  startIndex: number,
-  previousText: string,
-  formattedText: string
-): respacer.WhitespaceChange[] {
-  if (previousText == formattedText) {
-    return [];
-  } else {
-    const previousNsInfo = nsForm.nsRangeFromText(previousText);
-    const formattedNsInfo = nsForm.nsRangeFromText(formattedText);
-    if (previousNsInfo && formattedNsInfo) {
-      const [previousNsName, previousNsRange] = previousNsInfo;
-      const [formattedNsName, formattedNsRange] = formattedNsInfo;
-      const nsEdits = respacer.whitespaceEdits(
-        eol,
-        startIndex,
-        previousText.substring(0, previousNsRange[1]),
-        formattedText.substring(0, formattedNsRange[1])
-      );
-      const otherEdits = respacer.whitespaceEdits(
-        eol,
-        startIndex + previousNsRange[1],
-        previousText.substring(previousNsRange[1]),
-        formattedText.substring(formattedNsRange[1])
-      );
-      return [...otherEdits, ...nsEdits];
-    } else {
-      return respacer.whitespaceEdits(eol, startIndex, previousText, formattedText);
-    }
+async function documentFormatJob(
+  doc: vscode.TextDocument,
+  job: FormatJob,
+  token?: vscode.CancellationToken
+) {
+  const version = doc.version;
+  const valid = () => !doc.isClosed && doc.version === version && !token?.isCancellationRequested;
+  if (!valid()) {
+    return undefined;
+  }
+  const size = job.kind === 'indexes' ? job.range[1] - job.range[0] : job.text.length;
+  if (size < LARGE_FORMAT_RANGE) {
+    return runFormatJob(job);
+  }
+  const request = formatterWorker.request(doc.uri.toString(), job);
+  const subscriptions = [
+    vscode.workspace.onDidChangeTextDocument((event) => {
+      if (event.document === doc && doc.version !== version) {
+        request.cancel();
+      }
+    }),
+    vscode.workspace.onDidCloseTextDocument((closed) => {
+      if (closed === doc) {
+        request.cancel();
+      }
+    }),
+  ];
+  if (token) {
+    subscriptions.push(token.onCancellationRequested(() => request.cancel()));
+  }
+  // Avoid flicker during quick edits while making long or queued jobs visible.
+  const progressTimer = setTimeout(() => {
+    void vscode.window
+      .withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `Calva: Formatting ${doc.fileName.split(/[\\/]/).pop()}`,
+          cancellable: true,
+        },
+        (_progress, cancellationToken) => {
+          const cancellation = cancellationToken.onCancellationRequested(request.cancel);
+          // The original await below owns formatter failures. Progress simply closes.
+          return request.promise
+            .then(
+              () => undefined,
+              () => undefined
+            )
+            .finally(() => cancellation.dispose());
+        }
+      )
+      .then(undefined, (error) => console.error('Formatting progress failed', error));
+  }, 750);
+  try {
+    const result = await request.promise;
+    return valid() ? result : undefined;
+  } finally {
+    clearTimeout(progressTimer);
+    subscriptions.forEach((subscription) => subscription.dispose());
   }
 }
 
-/** undefined if range starts in a string or comment */
-function rangeReformatChanges(
+/** undefined means canceled; ranges inside a string/comment have no edits. */
+async function rangeReformatChanges(
   document: vscode.TextDocument,
   originalRange: vscode.Range,
-  onType: boolean
-): respacer.WhitespaceChange[] | undefined {
+  onType: boolean,
+  token?: vscode.CancellationToken,
+  extraConfig: CljFmtConfig = {}
+): Promise<respacer.WhitespaceChange[] | undefined> {
+  const mirrorDoc = docMirror.getDocument(document);
   const startIndex = document.offsetAt(originalRange.start);
+  const cursor = mirrorDoc.getTokenCursor(startIndex);
+  if (startIndex !== 0 && (cursor.withinString() || cursor.withinComment())) {
+    return [];
+  }
   const endIndex = document.offsetAt(originalRange.end);
-  return documentRangeReformatChanges(docMirror.getDocument(document), document.eol, {
-    startIndex,
-    startColumn: originalRange.start.character,
-    originalText: document.getText(originalRange),
-    fullDocument: startIndex === 0 && endIndex === document.getText().length,
-  });
+  const result = await documentFormatJob(
+    document,
+    {
+      kind: 'range',
+      text: document.getText(originalRange),
+      range: [startIndex, endIndex],
+      indexes: [],
+      eol: _convertEolNumToStringNotation(document.eol),
+      onType,
+      startColumn: originalRange.start.character,
+      fullDocument: startIndex === 0 && endIndex === document.getText().length,
+      config: { ...config.getConfigNow(document), ...extraConfig },
+      scannerMaxLength: getScannerMaxLength(),
+    },
+    token
+  );
+  return result?.changes;
 }
 
 type DocumentRange = {
@@ -182,15 +221,20 @@ export function documentRangeReformatChanges(
   }
 }
 
-export function formatRangeEdits(
+export async function formatRangeEdits(
   document: vscode.TextDocument,
-  originalRange: vscode.Range
-): vscode.TextEdit[] | undefined {
-  // Output/REPL window holds prompts etc. The formatter cannot format it. Do not try.
+  originalRange: vscode.Range,
+  token?: vscode.CancellationToken
+): Promise<vscode.TextEdit[] | undefined> {
   if (outputWindow.isReplWindowDoc(document)) {
     return [];
   }
-  return rangeReformatChanges(document, originalRange, false).map((chg) =>
+  const version = document.version;
+  const changes = await rangeReformatChanges(document, originalRange, false, token);
+  if (document.isClosed || document.version !== version || token?.isCancellationRequested) {
+    return undefined;
+  }
+  return changes?.map((chg) =>
     vscode.TextEdit.replace(
       new vscode.Range(document.positionAt(chg.start), document.positionAt(chg.end)),
       chg.text
@@ -199,14 +243,12 @@ export function formatRangeEdits(
 }
 
 export async function formatRange(document: vscode.TextDocument, range: vscode.Range) {
-  const wsEdit: vscode.WorkspaceEdit = new vscode.WorkspaceEdit();
-  const edits = formatRangeEdits(document, range);
-
-  if (_.isUndefined(edits)) {
-    console.error('formatRangeEdits returned undefined!', _.cloneDeep({ document, range }));
+  const version = document.version;
+  const edits = await formatRangeEdits(document, range);
+  if (!edits || document.isClosed || document.version !== version) {
     return false;
   }
-
+  const wsEdit = new vscode.WorkspaceEdit();
   wsEdit.set(document.uri, edits);
   return vscode.workspace.applyEdit(wsEdit);
 }
@@ -229,28 +271,47 @@ export function formatDocIndexRange(
   return formatRangeSmall ? formatRangeSmall : [-1, -1];
 }
 
-export function formatDocIndexesInfo(
+export async function formatDocIndexesInfo(
   doc: vscode.TextDocument,
   onType: boolean,
   indexOfRange: number,
   cursorIndexes: number[],
-  extraConfig: CljFmtConfig = {}
+  extraConfig: CljFmtConfig = {},
+  knownFormatRange?: [number, number],
+  localRange = false
 ) {
-  const formatRange = formatDocIndexRange(doc, indexOfRange, extraConfig);
-  if (!formatRange || (formatRange[0] == -1 && formatRange[1] == -1)) {
-    return;
+  const mDoc = docMirror.getDocument(doc);
+  const formatRange = knownFormatRange ?? formatDocIndexRange(doc, indexOfRange, extraConfig);
+  if (!formatRange || formatRange[0] < 0) {
+    return undefined;
   }
-  const info = formattedRangeInfo(
-    docMirror.getDocument(doc),
-    doc.getText(),
-    _convertEolNumToStringNotation(doc.eol),
-    formatRange,
-    { onType, cursorIndexes, extraConfig }
-  );
-  return {
-    ...info,
-    range: new vscode.Range(doc.positionAt(info.range[0]), doc.positionAt(info.range[1])),
-  };
+  const cursor = mDoc.getTokenCursor(1 + formatRange[0]);
+  const range = new vscode.Range(doc.positionAt(formatRange[0]), doc.positionAt(formatRange[1]));
+  const result = await documentFormatJob(doc, {
+    kind: localRange ? 'local' : 'indexes',
+    text: localRange ? doc.getText(range) : doc.getText(),
+    range: formatRange,
+    indexes: localRange
+      ? cursorIndexes
+          .filter((p) => p >= formatRange[0] && p < formatRange[1])
+          .map((p) => p - formatRange[0])
+      : cursorIndexes,
+    eol: _convertEolNumToStringNotation(doc.eol),
+    onType,
+    startColumn: range.start.character,
+    config: {
+      ...config.getConfigNow(doc),
+      ...extraConfig,
+      'comment-form?': !localRange && util.isCommentFormHead(cursor.getFunctionName()),
+    },
+    scannerMaxLength: getScannerMaxLength(),
+  });
+  return result
+    ? {
+        ...result,
+        range: new vscode.Range(doc.positionAt(result.range[0]), doc.positionAt(result.range[1])),
+      }
+    : undefined;
 }
 
 function formattedRangeInfo(
@@ -387,6 +448,7 @@ export async function formatPosition(
   extraConfig: CljFmtConfig = {}
 ): Promise<boolean> {
   const doc: vscode.TextDocument = editor.document;
+  const version = doc.version;
   const ranges = editor.selections
     .map((sel) => doc.offsetAt(sel.active))
     .map((index) => formatDocIndexRange(doc, index, extraConfig))
@@ -398,7 +460,7 @@ export async function formatPosition(
     if (outputWindow.isReplWindowDoc(editor.document)) {
       return Promise.resolve(false);
     }
-    orderedChanges = rangeReformatChanges(
+    orderedChanges = await rangeReformatChanges(
       doc,
       new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length)),
       onType
@@ -406,13 +468,23 @@ export async function formatPosition(
   } else {
     const dedupedRanges = docMirror.nonOverlappingRanges(ranges);
     const cursorOffsets = editor.selections.map((sel) => doc.offsetAt(sel.active));
-    orderedChanges = dedupedRanges
-      .map((rng) => rng[0])
-      .flatMap((index) => {
-        const formattedInfo = formatDocIndexesInfo(doc, onType, index, cursorOffsets, extraConfig);
-        return formattedInfo ? formattedInfo.changes : [];
-      })
-      .sort((a, b) => b.start - a.start);
+    orderedChanges = [];
+    for (const range of dedupedRanges) {
+      const info = await formatDocIndexesInfo(doc, onType, range[0], cursorOffsets, extraConfig);
+      if (!info || doc.isClosed || doc.version !== version) {
+        return false;
+      }
+      orderedChanges.push(...info.changes);
+    }
+    orderedChanges.sort((a, b) => b.start - a.start);
+  }
+  if (
+    !orderedChanges ||
+    doc.isClosed ||
+    doc.version !== version ||
+    !vscode.window.visibleTextEditors.includes(editor)
+  ) {
+    return false;
   }
   return editor.edit((textEditorEdit) => {
     let monotonicallyDecreasing = -1;
@@ -432,27 +504,39 @@ export async function formatPosition(
 
 // Debounce format-as-you-type and toss it aside if User seems still to be working
 // Increased from 250ms to 400ms to reduce cursor jumping issues
-let scheduledFormatCircumstances = undefined;
+let scheduledFormatCircumstances:
+  | {
+      editor: vscode.TextEditor;
+      documentVersion: number;
+      timeoutId: ReturnType<typeof setTimeout>;
+    }
+  | undefined;
 const scheduledFormatDelayMs = 400;
 
 function formatPositionCallback(extraConfig: CljFmtConfig) {
+  const circumstances = scheduledFormatCircumstances;
   if (
-    scheduledFormatCircumstances &&
-    vscode.window.activeTextEditor === scheduledFormatCircumstances['editor'] &&
-    vscode.window.activeTextEditor.document.version ==
-      scheduledFormatCircumstances['documentVersion']
+    circumstances &&
+    vscode.window.activeTextEditor === circumstances.editor &&
+    circumstances.editor.document.version === circumstances.documentVersion
   ) {
-    void formatPosition(scheduledFormatCircumstances['editor'], true, extraConfig).finally(() => {
-      scheduledFormatCircumstances = undefined;
-    });
+    void formatPosition(circumstances.editor, true, extraConfig)
+      .catch((error) => console.error('Scheduled formatting failed', error))
+      .finally(() => {
+        // A subsequent edit may have scheduled another job while this one
+        // awaited its worker or was canceled by that edit.
+        if (scheduledFormatCircumstances === circumstances) {
+          scheduledFormatCircumstances = undefined;
+        }
+      });
   }
-  // do not anull scheduledFormatCircumstances. Another callback might have been scheduled
 }
 
 export function scheduleFormatAsType(editor: vscode.TextEditor, extraConfig: CljFmtConfig = {}) {
   const expectedDocumentVersionUponCallback = 1 + editor.document.version;
   if (
     !scheduledFormatCircumstances ||
+    editor !== scheduledFormatCircumstances.editor ||
     expectedDocumentVersionUponCallback != scheduledFormatCircumstances['documentVersion']
   ) {
     // Unschedule (if scheduled) & reschedule: best effort to reformat at a quiet time
@@ -470,15 +554,90 @@ export function scheduleFormatAsType(editor: vscode.TextEditor, extraConfig: Clj
 }
 
 export function formatPositionCommand(editor: vscode.TextEditor) {
-  void formatPosition(editor), false, { 'full-document?': false };
+  return formatPosition(editor, false);
 }
 
-export function alignPositionCommand(editor: vscode.TextEditor) {
-  void formatPosition(editor, true, { 'align-associative?': true });
+export async function alignPositionCommand(editor: vscode.TextEditor): Promise<boolean> {
+  const doc = editor.document;
+  const version = doc.version;
+  const mirror = docMirror.getDocument(doc);
+  if (mirror.model.documentVersion !== version) {
+    return false;
+  }
+  const selections: [number, number][] = editor.selections.map((selection) => [
+    doc.offsetAt(selection.anchor),
+    doc.offsetAt(selection.active),
+  ]);
+  const ranges = alignRanges(mirror.model.lineInputModel, selections);
+  if (!ranges.length) {
+    return false;
+  }
+  const cursorOffsets = selections.map(([, active]) => active);
+  const changes: respacer.WhitespaceChange[] = [];
+  for (const range of ranges) {
+    const isSelection = selections.some(
+      ([anchor, active]) =>
+        anchor !== active &&
+        Math.min(anchor, active) >= range[0] &&
+        Math.max(anchor, active) <= range[1]
+    );
+    if (isSelection) {
+      const selectedText = doc.getText(
+        new vscode.Range(doc.positionAt(range[0]), doc.positionAt(range[1]))
+      );
+      const missing = cursorDocUtils.getMissingBrackets(selectedText);
+      if (missing.prepend || missing.append) {
+        // Match selection formatting's support for incomplete collections.
+        // Healing must not reindent lines inside multiline string literals.
+        const fragment = new StringDocument(selectedText).model;
+        fragment.flushChanges();
+        if (getStructuralIndex(fragment)?.hasMultilineStrings) {
+          return false;
+        }
+        const selectedChanges = await rangeReformatChanges(
+          doc,
+          new vscode.Range(doc.positionAt(range[0]), doc.positionAt(range[1])),
+          true,
+          undefined,
+          { 'align-associative?': true }
+        );
+        if (!selectedChanges || doc.isClosed || doc.version !== version) {
+          return false;
+        }
+        changes.push(...selectedChanges);
+        continue;
+      }
+    }
+    // Respect these exact bounds. Recalculating from their opening offset
+    // would promote a nested collection to its parent (sometimes the file).
+    const info = await formatDocIndexesInfo(
+      doc,
+      true,
+      range[0],
+      cursorOffsets,
+      { 'align-associative?': true },
+      range
+    );
+    if (!info || doc.isClosed || doc.version !== version) {
+      return false;
+    }
+    changes.push(...info.changes);
+  }
+  if (!vscode.window.visibleTextEditors.includes(editor)) {
+    return false;
+  }
+  return editor.edit((edit) => {
+    for (const change of changes.sort((a, b) => b.start - a.start)) {
+      edit.replace(
+        new vscode.Range(doc.positionAt(change.start), doc.positionAt(change.end)),
+        change.text
+      );
+    }
+  });
 }
 
 export function trimWhiteSpacePositionCommand(editor: vscode.TextEditor) {
-  void formatPosition(editor, false, { 'remove-multiple-non-indenting-spaces?': true });
+  return formatPosition(editor, false, { 'remove-multiple-non-indenting-spaces?': true });
 }
 
 export function formatCode(code: string, eol: number, fullDocument: boolean = true) {

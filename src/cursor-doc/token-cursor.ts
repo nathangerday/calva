@@ -1,6 +1,7 @@
 import * as model from './model';
 import * as clojureLexer from './clojure-lexer';
 import * as pareditConfig from './paredit-config';
+import { getStructuralIndex } from './structural-index';
 
 type Token = clojureLexer.Token;
 type CommentFormConfig = pareditConfig.CommentFormConfig;
@@ -245,6 +246,16 @@ export class LispTokenCursor extends TokenCursor {
     const stack = [];
     let isMetadata = false;
     this.forwardWhitespace(skipComments);
+    if (this.getToken().type === 'open' && !this.tokenBeginsMetadata()) {
+      const index = getStructuralIndex(this.doc);
+      const opening = index?.navigationSafe ? index.byOffset.get(this.offsetStart) : undefined;
+      if (opening?.pair) {
+        this.line = opening.pair.line;
+        this.token = opening.pair.token;
+        this.next();
+        return true;
+      }
+    }
     if (this.getToken().type === 'close') {
       return false;
     }
@@ -329,6 +340,17 @@ export class LispTokenCursor extends TokenCursor {
   backwardSexp(skipComments = true, skipMetadata = false, skipReaders = true) {
     const stack = [];
     this.backwardWhitespace(skipComments);
+    if (this.getPrevToken().type === 'close') {
+      const previous = this.clone();
+      previous.previous();
+      const index = getStructuralIndex(this.doc);
+      const closing = index?.navigationSafe ? index.byOffset.get(previous.offsetStart) : undefined;
+      if (closing?.pair) {
+        this.line = closing.pair.line;
+        this.token = closing.pair.token;
+        return true;
+      }
+    }
     if (this.getPrevToken().type === 'open') {
       return false;
     }
@@ -532,6 +554,14 @@ export class LispTokenCursor extends TokenCursor {
    * @param openingBracket
    */
   rangeForList(depth: number, openingBracket?: string): [number, number] {
+    const index = getStructuralIndex(this.doc);
+    if (index?.navigationSafe && openingBracket === undefined && depth > 0) {
+      let opening = index.enclosing(this.offsetStart);
+      for (let i = 1; i < depth && opening?.parent; i++) {
+        opening = opening.parent;
+      }
+      return opening?.pair ? [opening.offset, opening.pair.end] : undefined;
+    }
     const cursor = this.clone();
     let range: [number, number] = undefined;
     for (let i = 0; i < depth; i++) {
@@ -817,6 +847,12 @@ export class LispTokenCursor extends TokenCursor {
     commentCreatesTopLevel = true,
     commentFormConfig?: CommentFormConfig
   ): [number, number] {
+    if (!commentCreatesTopLevel) {
+      const range = getStructuralIndex(this.doc)?.topLevelRange(p);
+      if (range) {
+        return range;
+      }
+    }
     const cursor = this.doc.getTokenCursor(p);
     const getFunctionPositionText = (cursor: LispTokenCursor) => {
       // NB: This is probably a general need, so might with ino the token cursor.
@@ -1028,6 +1064,12 @@ export class LispTokenCursor extends TokenCursor {
     commentCreatesTopLevel: boolean = false,
     commentFormConfig?: CommentFormConfig
   ): boolean {
+    if (!commentCreatesTopLevel) {
+      const index = getStructuralIndex(this.doc);
+      if (index?.navigationSafe) {
+        return !index.enclosing(this.offsetStart);
+      }
+    }
     const tlCursor = this.clone();
     if (tlCursor.forwardList() && tlCursor.upList()) {
       if (

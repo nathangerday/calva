@@ -3,6 +3,12 @@ import * as vscode from 'vscode';
 import * as utilities from '../utilities';
 import * as formatter from '../calva-fmt/src/format';
 import * as respacer from '../calva-fmt/src/respacer';
+import {
+  localFormatRanges,
+  mergeFormatRanges,
+  postEditChangedRanges,
+} from '../calva-fmt/src/local-ranges';
+import * as formatterConfig from '../formatter-config';
 import * as tokenCursor from '../cursor-doc/token-cursor';
 import * as documentModel from '../cursor-doc/model';
 import * as _ from 'lodash';
@@ -135,6 +141,7 @@ export class DocumentModel implements EditableModel {
     newModel.insertString(0, text);
     newModel.flushChanges();
     newModel.dirtyLines = [];
+    newModel.changedLines.clear();
     newModel.insertedLines.clear();
     newModel.deletedLines.clear();
     this.lineInputModel = newModel;
@@ -176,23 +183,51 @@ export class DocumentModel implements EditableModel {
     }
   }
 
-  private postEditReformat(editor: vscode.TextEditor, offsets: number[]): Thenable<boolean> {
+  private async postEditReformat(
+    editor: vscode.TextEditor,
+    offsets: number[],
+    changedRanges: ModelEditRange[]
+  ): Promise<boolean> {
     // Now that the document has been edited, calculate the reformatting:
-    const reformatChange: respacer.WhitespaceChange[] = _.sortedUniq(offsets.sort((a, b) => b - a))
-      .flatMap((p) => {
-        try {
-          const doc = this.document.document;
-          const formattedInfo = formatter.formatDocIndexesInfo(
-            doc,
-            true,
-            p,
-            editor.selections.map((s) => s.active).map((p) => doc.offsetAt(p))
-          );
-          return formattedInfo ? formattedInfo.changes : [];
-        } catch (e) {
-          return [];
+    const doc = this.document.document;
+    const version = doc.version;
+    const cursorOffsets = editor.selections.map((s) => doc.offsetAt(s.active));
+    const ranges = mergeFormatRanges(
+      offsets
+        .map((p) => formatter.formatDocIndexRange(doc, p, {}))
+        .filter((range) => range && range[0] >= 0)
+    );
+    const plannedRanges = localFormatRanges(
+      this.lineInputModel,
+      ranges,
+      changedRanges,
+      formatterConfig.getConfigNow(doc)
+    );
+    const changes: respacer.WhitespaceChange[] = [];
+    for (const formatRange of plannedRanges) {
+      try {
+        const info = await formatter.formatDocIndexesInfo(
+          doc,
+          true,
+          formatRange[0],
+          cursorOffsets,
+          {},
+          formatRange,
+          !ranges.some(([start, end]) => start === formatRange[0] && end === formatRange[1])
+        );
+        if (!info || doc.isClosed || doc.version !== version) {
+          return false;
         }
-      })
+        changes.push(...info.changes);
+      } catch (error) {
+        console.error('Post-edit formatting failed', error);
+      }
+      if (doc.isClosed || doc.version !== version) {
+        return false;
+      }
+    }
+    const reformatChange = changes
+      .sort((a, b) => b.start - a.start || b.end - a.end)
       .filter(
         (function () {
           // With multiple cursors, the reformat edits might overlap.
@@ -213,7 +248,10 @@ export class DocumentModel implements EditableModel {
           };
         })()
       );
-    const doc = this.document.document;
+    // The captured editor can be disposed while the formatter worker is running.
+    if (!vscode.window.visibleTextEditors.includes(editor)) {
+      return false;
+    }
     // Do an edit transaction, even if insubstantial, just for the undoStopAfter=true.
     return editor.edit(
       (textEditorEdit) => {
@@ -297,6 +335,10 @@ export class DocumentModel implements EditableModel {
       ? surgicalRanges
       : [[0, this.document.document.getText().length]];
     const postEditPlanDraft = {
+      changedRanges: postEditChangedRanges(
+        modelEdits,
+        this.document.document.eol === 2 ? '\r\n' : '\n'
+      ),
       forDocumentVersion: this.document.document.version + 1, // none of this matters if another edit intervenes
       reformatOffsets: options.skipFormat
         ? undefined
@@ -343,14 +385,16 @@ export class DocumentModel implements EditableModel {
             }
             if (postEditPlan.reformatOffsets) {
               {
-                return this.postEditReformat(editor, postEditPlan.reformatOffsets).then(
-                  (reformatFulfilled) => {
-                    if (!reformatFulfilled) {
-                      console.warn('Post-edit reformat was not fulfilled');
-                    }
-                    return true; // because the main edit was fulfilled
+                return this.postEditReformat(
+                  editor,
+                  postEditPlan.reformatOffsets,
+                  postEditPlan.changedRanges
+                ).then((reformatFulfilled) => {
+                  if (!reformatFulfilled) {
+                    console.warn('Post-edit reformat was not fulfilled');
                   }
-                );
+                  return true; // because the main edit was fulfilled
+                });
               }
             }
           }
@@ -494,6 +538,7 @@ function processChanges(event: vscode.TextDocumentChangeEvent) {
 
   // we must clear out the repaint cache data, since we don't use it.
   model.lineInputModel.dirtyLines = [];
+  model.lineInputModel.changedLines.clear();
   model.lineInputModel.insertedLines.clear();
   model.lineInputModel.deletedLines.clear();
 
@@ -525,6 +570,10 @@ function addDocument(doc?: vscode.TextDocument): boolean {
     if (!documents.has(doc)) {
       const document = new MirroredDocument(doc);
       document.model.lineInputModel.insertString(0, doc.getText());
+      document.model.lineInputModel.flushChanges();
+      document.model.lineInputModel.changedLines.clear();
+      document.model.lineInputModel.insertedLines.clear();
+      document.model.lineInputModel.deletedLines.clear();
       documents.set(doc, document);
       return false;
     } else {

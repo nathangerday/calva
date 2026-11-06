@@ -847,14 +847,14 @@ describe('paredit commands', () => {
         const a = textNotation.docFromTextNotation('(a ;; foo|\n e)');
         const b = textNotation.docFromTextNotation('(|\n e)');
         await handlers.killLeft(a, false);
-        expectLib.expect(a).toEqual(b);
+        expectLib.expect(_.omit(a, defaultDocOmit)).toEqual(_.omit(b, defaultDocOmit));
       });
 
       it('Single-cursor: Finds start of form from inside comment (Windows)', async () => {
         const a = textNotation.docFromTextNotation('(a ;; foo|\r\n e)');
         const b = textNotation.docFromTextNotation('(|\r\n e)');
         await handlers.killLeft(a, false);
-        expectLib.expect(a).toEqual(b);
+        expectLib.expect(_.omit(a, defaultDocOmit)).toEqual(_.omit(b, defaultDocOmit));
       });
 
       it('Single-cursor: Maintains balanced delimiters 1', async () => {
@@ -1010,7 +1010,7 @@ describe('paredit commands', () => {
         const a = textNotation.docFromTextNotation('(foo |bar)\n');
         const b = textNotation.docFromTextNotation('(|bar)\n');
         await handlers.killLeft(a, false);
-        expectLib.expect(a).toEqual(b);
+        expectLib.expect(_.omit(a, defaultDocOmit)).toEqual(_.omit(b, defaultDocOmit));
       });
 
       it('Single-cursor: Finds start of maps', async () => {
@@ -1157,7 +1157,7 @@ describe('paredit commands', () => {
         const a = textNotation.docFromTextNotation('\n(|a e)\n');
         const b = textNotation.docFromTextNotation('\n(||a e)\n');
         await handlers.killLeft(a, false);
-        expectLib.expect(a).toEqual(b);
+        expectLib.expect(_.omit(a, defaultDocOmit)).toEqual(_.omit(b, defaultDocOmit));
       });
 
       it('Single-cursor: Finds the full form after an ignore marker', async () => {

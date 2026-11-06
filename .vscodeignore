@@ -19,4 +19,7 @@
 !deps.clj.jar
 !deps-clj-version
 !bundled/**
+bundled/clojure-lsp/.download-*/**
+!lsp-bundle.json
+!PERFORMANCE-BUILD.md
 !snippets.jsonc

@@ -91,8 +91,9 @@ export class LexicalGrammar {
   terminal(name: string, pattern: string | RegExp, fn: (T, RegExpExecArray) => any): void {
     this.rules.push({
       name,
-      // This is b/c the RegExp constructor seems to not like our union type (unknown reasons why)
-      r: pattern instanceof RegExp ? new RegExp(pattern, 'g') : new RegExp(pattern, 'g'),
+      // Tokens must start at lastIndex. Global matching needlessly searches the
+      // remaining line for every rule that fails at the current position.
+      r: pattern instanceof RegExp ? new RegExp(pattern, 'y') : new RegExp(pattern, 'y'),
       fn: fn,
     });
   }

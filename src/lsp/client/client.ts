@@ -10,7 +10,6 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as lspState from '../state';
 import * as tokenFilter from './semantic-token-filter';
-import * as api from '../api';
 import * as replInputCopy from '../repl-input-copy';
 
 /**
@@ -96,20 +95,31 @@ class TestTreeFeature implements vscode_lsp.StaticFeature {
   }
 }
 
-// Cache for semantic token type, so we don't need to hit the LSP server every time
-let commentTokenType: number | null = null;
-
 type CreateClientParams = {
   lsp_server_path: string;
   uri: vscode.Uri;
   id: string;
 };
 export const createClient = (params: CreateClientParams): defs.LspClient => {
+  const filterSemanticTokens = (result: vscode.SemanticTokens | null) => {
+    if (!result) {
+      return result;
+    }
+    const legend = client.initializeResult?.capabilities.semanticTokensProvider?.legend;
+    const commentTokenType = legend?.tokenTypes.indexOf('comment') ?? -1;
+    if (commentTokenType < 0) {
+      return result;
+    }
+    const data = tokenFilter.filterCommentTokens(result.data, commentTokenType);
+    // Filtered data cannot reuse the server's delta base, so omit resultId.
+    return new vscode.SemanticTokens(new Uint32Array(data));
+  };
+
   // Run JARs with system Java; anything else execute directly
   let serverOptions: vscode_lsp.ServerOptions;
   if (path.extname(params.lsp_server_path) === '.jar') {
     serverOptions = {
-      command: path.join(process.env.JAVA_HOME, 'bin', 'java'),
+      command: process.env.JAVA_HOME ? path.join(process.env.JAVA_HOME, 'bin', 'java') : 'java',
       args: ['-jar', params.lsp_server_path],
     };
   } else {
@@ -223,27 +233,10 @@ export const createClient = (params: CreateClientParams): defs.LspClient => {
           ) => Thenable<vscode.SemanticTokens> | vscode.SemanticTokens | null
         ) => {
           const result = await next(document, token);
-          if (!result) {
-            return result;
-          }
-          if (!commentTokenType) {
-            try {
-              const serverTokens = await api.getSemanticTokens(client);
-              console.debug('lsp serverTokens:', serverTokens);
-              commentTokenType = serverTokens?.indexOf('comment') || 10;
-            } catch (e) {
-              console.error('Failed to get semantic tokens from server:', e);
-              commentTokenType = 10;
-            }
-          }
-
-          const filterTokens = (tokens: vscode.SemanticTokens) => {
-            const data = new Uint32Array(tokens.data);
-            const filteredData = tokenFilter.filterCommentTokens(data, commentTokenType);
-            return new vscode.SemanticTokens(new Uint32Array(filteredData));
-          };
-
-          return filterTokens(result);
+          return filterSemanticTokens(result);
+        },
+        provideDocumentRangeSemanticTokens: async (document, range, token, next) => {
+          return filterSemanticTokens(await next(document, range, token));
         },
         async provideSignatureHelp(document, position, context, token, next) {
           const help = await signature.provideSignatureHelp(document, position, token);

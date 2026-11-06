@@ -25,10 +25,37 @@ export interface FormatResult {
   changes: respacer.WhitespaceChange[];
 }
 
+/** Keep the input after a formatter error only when the caller handles it. */
+export function formatText(
+  text: string,
+  eol: string,
+  fullDocument: boolean,
+  config: Record<string, any>,
+  onError?: (error: unknown) => void
+): string {
+  const result = cljsLib.jsify(
+    cljsLib.formatText({
+      'range-text': text,
+      eol,
+      config: { ...config, 'full-document?': fullDocument },
+    })
+  );
+  if (result.error) {
+    if (!onError) {
+      throw new Error(String(result.error));
+    }
+    onError(result.error);
+    return text;
+  }
+  return result['range-text'];
+}
+
 /** Pure formatter and diff work. The raw EDN preserves regex/custom indent
  * options across the worker boundary; ClojureScript values are reconstructed.
+ * REPL range formatting can handle formatter errors by logging them and keeping
+ * the input. Worker jobs leave onError unset so failures reach the caller.
  */
-export function runFormatJob(job: FormatJob): FormatResult {
+export function runFormatJob(job: FormatJob, onError?: (error: unknown) => void): FormatResult {
   const config = { ...job.config };
   if (config['cljfmt-options-string']) {
     config['cljfmt-options'] = cljsLib.cljfmtOptionsFromString(config['cljfmt-options-string']);
@@ -60,19 +87,14 @@ export function runFormatJob(job: FormatJob): FormatResult {
     const healing = job.fullDocument
       ? undefined
       : healer.bandage(job.text, job.startColumn, job.eol);
-    const result = cljsLib.jsify(
-      cljsLib.formatText({
-        'range-text': healing ? healing.healedText : job.text,
-        eol: job.eol,
-        config: { ...config, 'full-document?': !!job.fullDocument },
-      })
+    const formatted = formatText(
+      healing ? healing.healedText : job.text,
+      job.eol,
+      !!job.fullDocument,
+      config,
+      onError
     );
-    if (result.error) {
-      throw new Error(String(result.error));
-    }
-    formattedText = healing
-      ? healer.unbandage(healing, result['range-text'])
-      : result['range-text'];
+    formattedText = healing ? healer.unbandage(healing, formatted) : formatted;
   }
   return {
     formattedText,

@@ -4,6 +4,11 @@ Changes to Calva.
 
 ## [Unreleased]
 
+## [2.0.609-performance-formatting] - 2026-11-06
+
+- Share the formatting core between REPL input and cancellable worker jobs, including range healing and edit calculation.
+- Preserve REPL error fallback, worker error propagation, custom indentation, line endings, and undo behavior.
+
 ## [2.0.609-performance] - 2026-11-06
 
 - Sync the performance build with upstream Calva 2.0.609, including the new REPL input and output view improvements.

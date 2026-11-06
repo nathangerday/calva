@@ -2,20 +2,17 @@ import * as vscode from 'vscode';
 import * as config from '../../formatter-config';
 import * as outputWindow from '../../repl-window/repl-window-doc';
 import * as docMirror from '../../doc-mirror/index';
-import * as cljsLib from '../../../out/cljs-lib/cljs-lib';
 import * as util from '../../utilities';
 import * as respacer from './respacer';
 import * as cursorDocUtils from '../../cursor-doc/utilities';
 import _ = require('lodash');
 import type * as tokenCursor from '../../cursor-doc/token-cursor';
 import type { EditableDocument } from '../../cursor-doc/model';
-import * as formatIndex from './format-index';
-import { FormatJob, runFormatJob, whitespaceAndNsEdits } from './format-job';
+import { FormatJob, runFormatJob, formatText } from './format-job';
 import { formatterWorker } from './worker-client';
 import { getScannerMaxLength, StringDocument } from '../../cursor-doc/model';
 import { LARGE_FORMAT_RANGE } from './local-ranges';
 import * as state from '../../state';
-import * as healer from './healer';
 import { alignRanges } from './align-ranges';
 import { getStructuralIndex } from '../../cursor-doc/structural-index';
 
@@ -203,18 +200,21 @@ export function documentRangeReformatChanges(
   // Do not format comments as individual ranges.
   // But do not evade formatting the whole doc if it happens to begin with a comment.
   if (startIndex == 0 || (!cursor.withinString() && !cursor.withinComment())) {
-    const eolString = _convertEolNumToStringNotation(eol);
-
-    if (fullDocument) {
-      const formattedText = formatCode(originalText, eol, true);
-      return whitespaceAndNsEdits(eolString, startIndex, originalText, formattedText);
-    }
-
-    const healing = healer.bandage(originalText, startColumn, eolString);
-    const formattedHealedText = formatCode(healing.healedText, eol, false);
-    const newTextDraft = healer.unbandage(healing, formattedHealedText);
-    // unbandage aligned top-level forms flush-left, except the first one.
-    return whitespaceAndNsEdits(eolString, startIndex, originalText, newTextDraft);
+    return runFormatJob(
+      {
+        kind: 'range',
+        text: originalText,
+        range: [startIndex, startIndex + originalText.length],
+        indexes: [],
+        eol: _convertEolNumToStringNotation(eol),
+        onType: false,
+        startColumn,
+        fullDocument,
+        config: config.getConfigNow(),
+        scannerMaxLength: getScannerMaxLength(),
+      },
+      logFormatError
+    ).changes;
   } else {
     console.warn('Range starting in comment or string is not being formatted');
     return [];
@@ -326,22 +326,21 @@ function formattedRangeInfo(
   }: { onType: boolean; cursorIndexes: number[]; extraConfig: CljFmtConfig }
 ) {
   const cursor = mDoc.getTokenCursor(1 + formatRange[0]);
-  const formatted: {
-    'range-text': string;
-    range: number[];
-  } = formatIndex.formatIndexes(allText, formatRange, cursorIndexes, eol, onType, {
-    ...config.getConfigNow(),
-    ...extraConfig,
-    'comment-form?': util.isCommentFormHead(cursor.getFunctionName()),
+  return runFormatJob({
+    kind: 'indexes',
+    text: allText,
+    range: formatRange,
+    indexes: cursorIndexes,
+    eol,
+    onType,
+    startColumn: 0,
+    config: {
+      ...config.getConfigNow(),
+      ...extraConfig,
+      'comment-form?': util.isCommentFormHead(cursor.getFunctionName()),
+    },
+    scannerMaxLength: getScannerMaxLength(),
   });
-  const previousText = allText.substring(formatRange[0], formatRange[1]);
-  const formattedText = formatted['range-text'];
-  return {
-    formattedText,
-    range: formatted.range,
-    previousText,
-    changes: whitespaceAndNsEdits(eol, formatted.range[0], previousText, formattedText),
-  };
 }
 
 /**
@@ -641,37 +640,17 @@ export function trimWhiteSpacePositionCommand(editor: vscode.TextEditor) {
 }
 
 export function formatCode(code: string, eol: number, fullDocument: boolean = true) {
-  const d = {
-    'range-text': code,
-    eol: _convertEolNumToStringNotation(eol),
-    config: { ...config.getConfigNow(), 'full-document?': fullDocument },
-  };
-  const result = cljsLib.jsify(cljsLib.formatText(d));
-  if (!result['error']) {
-    return result['range-text'];
-  } else {
-    console.error('Error in `formatCode`:', result['error']);
-    return code;
-  }
+  return formatText(
+    code,
+    _convertEolNumToStringNotation(eol),
+    fullDocument,
+    config.getConfigNow(),
+    logFormatError
+  );
 }
 
-async function _formatRange(
-  rangeText: string,
-  allText: string,
-  range: number[],
-  eol: string
-): Promise<string | undefined> {
-  const d = {
-    'range-text': rangeText,
-    'all-text': allText,
-    range: range,
-    eol: eol,
-    config: { ...(await config.getConfig()), 'full-document?': false },
-  };
-  const result = cljsLib.jsify(cljsLib.formatTextAtRange(d));
-  if (!result['error']) {
-    return result['range-text'];
-  }
+function logFormatError(error: unknown) {
+  console.error('Error in `formatCode`:', error);
 }
 
 function _convertEolNumToStringNotation(eol: vscode.EndOfLine) {
